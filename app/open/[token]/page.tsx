@@ -83,7 +83,7 @@ export default function OpenViewer() {
 
   async function loadFull(id: string) {
     try {
-      const r = await fetch(`/api/received/${id}`, { cache: 'no-store' });
+      const r = await fetch(`/api/received/${id}?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json() as ReceivedResponse;
       setSelected(j.email);
@@ -96,7 +96,7 @@ export default function OpenViewer() {
   useEffect(() => {
     if (data && data.emails.length > 0 && !selected) {
       const firstId = data.emails[0].id;
-      fetch(`/api/received/${firstId}`, { cache: 'no-store' })
+      fetch(`/api/received/${firstId}?token=${encodeURIComponent(token)}`, { cache: 'no-store' })
         .then(r => {
           if (!r.ok) throw new Error('Failed to load');
           return r.json();
@@ -105,7 +105,7 @@ export default function OpenViewer() {
         .catch(err => console.error(err));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
+  }, [data, token]);
 
   if (asJson) {
     // Pure JSON mode for API users / scripts ("打开接口")

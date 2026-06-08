@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createSyncScheduler, normalizeSyncSettings } from '../lib/sync-scheduler';
+import { createSyncScheduler, normalizeSyncSettings } from '../lib/sync-scheduler.ts';
 
 test('normalizeSyncSettings 在未配置时默认开启并使用 60 秒间隔', () => {
   assert.deepEqual(normalizeSyncSettings(null), {

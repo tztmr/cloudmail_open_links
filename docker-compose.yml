@@ -9,9 +9,10 @@ services:
       - MONGODB_URI=mongodb://mongo:27017/cloudmail_open_links
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:3000}
-      - DYNMSL_API_TOKEN=${DYNMSL_API_TOKEN:-}
-      - DYNMSL_API_BASE_URL=${DYNMSL_API_BASE_URL:-https://mail.dynmsl.com/api/public}
-      - DYNMSL_WAF_BYPASS_TOKEN=${DYNMSL_WAF_BYPASS_TOKEN:-}
+      - MAIL_PROVIDER_API_TOKEN=${MAIL_PROVIDER_API_TOKEN:-}
+      - MAIL_PROVIDER_API_BASE_URL=${MAIL_PROVIDER_API_BASE_URL:-https://mail.example.com/api/public}
+      - MAIL_PROVIDER_WAF_BYPASS_TOKEN=${MAIL_PROVIDER_WAF_BYPASS_TOKEN:-}
+      - MAIL_PROVIDER_WAF_BYPASS_HEADER=${MAIL_PROVIDER_WAF_BYPASS_HEADER:-X-WAF-BYPASS}
     depends_on:
       - mongo
     restart: unless-stopped

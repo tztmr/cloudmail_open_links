@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin';
+import { requireUser } from '@/lib/admin';
 import { listProviders, bulkImportProviders, deleteProvider, upsertProvider } from '@/lib/db';
 import { ensureSyncRuntimeStarted } from '@/lib/sync-runtime';
 
@@ -14,19 +14,21 @@ type ProviderImportItem = {
 
 export async function GET() {
   ensureSyncRuntimeStarted();
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const providers = await listProviders();
+  const providers = await listProviders(viewer.role === 'admin' ? undefined : viewer.id);
   return NextResponse.json({ success: true, providers });
 }
 
 export async function POST(req: NextRequest) {
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -45,8 +47,8 @@ export async function POST(req: NextRequest) {
       token: String(provider.token),
       emailDomain: provider.emailDomain || provider.email_domain || undefined,
     }));
-    const count = await bulkImportProviders(normalized);
-    const all = await listProviders();
+    const count = await bulkImportProviders(normalized, viewer.id);
+    const all = await listProviders(viewer.role === 'admin' ? undefined : viewer.id);
     return NextResponse.json({ success: true, imported: count, providers: all });
   }
 
@@ -62,14 +64,15 @@ export async function POST(req: NextRequest) {
     domain: String(domain),
     token: String(token),
     email_domain: emailDomain || null,
-  });
+  }, viewer.id);
 
   return NextResponse.json({ success: true, provider: prov });
 }
 
 export async function DELETE(req: NextRequest) {
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -78,6 +81,6 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
-  deleteProvider(id);
+  await deleteProvider(id, viewer.role === 'admin' ? undefined : viewer.id);
   return NextResponse.json({ success: true });
 }

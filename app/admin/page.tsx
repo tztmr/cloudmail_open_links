@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { 
   Cloud, 
   Settings, 
@@ -16,6 +16,11 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
+import {
+  DEFAULT_BATCH_LINK_EXPIRES_DAYS,
+  DEFAULT_BATCH_LINK_MAX_VIEWS,
+  parseBatchShareLinkOptions,
+} from '@/lib/share-link-settings';
 
 type CharType = 'mixed' | 'number' | 'english';
 
@@ -71,9 +76,29 @@ type ApiError = {
   error?: string;
 };
 
+type CurrentUser = {
+  id: string;
+  username: string;
+  role: 'admin' | 'user';
+};
+
+type ManagedUser = CurrentUser & {
+  created_at?: string;
+};
+
+type AuthMode = 'bootstrap' | 'login';
+
 type LoginResponse = {
   success?: boolean;
   message?: string;
+  mode?: AuthMode;
+  allowBootstrap?: boolean;
+  currentUser?: CurrentUser | null;
+} & ApiError;
+
+type UsersResponse = {
+  success: boolean;
+  users: ManagedUser[];
 } & ApiError;
 
 type MailboxesResponse = {
@@ -96,7 +121,7 @@ type ProvidersResponse = {
   provider?: Provider;
 } & ApiError;
 
-type DynmslCreateResponse = {
+type ProviderAccountCreateResponse = {
   success: boolean;
   created: number;
   accounts: CreatedAccount[];
@@ -130,10 +155,17 @@ function normalizeCharType(value: string): CharType {
 }
 
 export default function Admin() {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newRole, setNewRole] = useState<'admin' | 'user'>('user');
 
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -145,18 +177,24 @@ export default function Admin() {
   const [singleEmail, setSingleEmail] = useState('');
   const [note, setNote] = useState('');
   const [group, setGroup] = useState('');
-  const [maxViews, setMaxViews] = useState(0);
-  const [expiresMin, setExpiresMin] = useState(0);
+  const [batchLinkMaxViews, setBatchLinkMaxViews] = useState(DEFAULT_BATCH_LINK_MAX_VIEWS);
+  const [batchLinkExpiresDays, setBatchLinkExpiresDays] = useState(DEFAULT_BATCH_LINK_EXPIRES_DAYS);
   const [queryGroup, setQueryGroup] = useState('');
-  const [queryLimit, setQueryLimit] = useState(1000);
+  const [queryLimit, setQueryLimit] = useState(999999);
   const [selectedMailboxes, setSelectedMailboxes] = useState<Set<string>>(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [bulkGroupModalOpen, setBulkGroupModalOpen] = useState(false);
+  const [bulkGroupInput, setBulkGroupInput] = useState('');
+  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
+  const [batchLinkModalOpen, setBatchLinkModalOpen] = useState(false);
 
-  const [dynCount, setDynCount] = useState(10);
-  const [dynPrefix, setDynPrefix] = useState('');
-  const [dynCharType, setDynCharType] = useState<CharType>('mixed');
-  const [dynCharLen, setDynCharLen] = useState(8);
-  const [dynMaxViews, setDynMaxViews] = useState(0);
-  const [dynExpiresMin, setDynExpiresMin] = useState(0);
+  const [createCount, setCreateCount] = useState(10);
+  const [createPrefix, setCreatePrefix] = useState('');
+  const [createCharType, setCreateCharType] = useState<CharType>('mixed');
+  const [createCharLen, setCreateCharLen] = useState(8);
+  const [createMaxViews, setCreateMaxViews] = useState(0);
+  const [createExpiresMin, setCreateExpiresMin] = useState(0);
   const [lastCreated, setLastCreated] = useState<CreatedAccount[]>([]);
 
   const [editingMailbox, setEditingMailbox] = useState<string | null>(null);
@@ -194,17 +232,105 @@ export default function Admin() {
     }
   }
 
+  async function loadUsers() {
+    const response = await requestJson<UsersResponse>('/api/admin/users');
+    setUsers(response.users || []);
+  }
+
+  async function refreshSession() {
+    try {
+      const response = await requestJson<LoginResponse>('/api/admin/login');
+      setAuthMode(response.mode || 'login');
+      setCurrentUser(response.currentUser || null);
+
+      if (response.currentUser) {
+        setAuthed(true);
+        await loadAll();
+        if (response.currentUser.role === 'admin') {
+          await loadUsers();
+        }
+      } else {
+        setAuthed(false);
+      }
+    } catch {
+      setAuthed(false);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshSession();
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function login() {
     setLoading(true);
     setMsg('');
     try {
-      await requestJson<LoginResponse>('/api/admin/login', {
+      const response = await requestJson<LoginResponse>('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({
+          action: authMode,
+          username,
+          password,
+        }),
       });
+
+      setAuthMode(response.mode || 'login');
+      setCurrentUser(response.currentUser || null);
       setAuthed(true);
       await loadAll();
+      if (response.currentUser?.role === 'admin') {
+        await loadUsers();
+      }
+    } catch (error: unknown) {
+      setMsg(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function logout() {
+    setLoading(true);
+    try {
+      await requestJson<{ success: boolean }>('/api/admin/login', {
+        method: 'DELETE',
+      });
+      setAuthed(false);
+      setCurrentUser(null);
+      setUsers([]);
+      setUsername('');
+      setPassword('');
+      await refreshSession();
+    } catch (error: unknown) {
+      setMsg(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createManagedUser() {
+    if (!newUsername.trim() || !newPassword.trim()) return;
+    setLoading(true);
+    setMsg('');
+    try {
+      await requestJson<{ success: boolean }>('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: newUsername,
+          password: newPassword,
+          role: newRole,
+        }),
+      });
+      setMsg(`用户 ${newUsername} 创建成功`);
+      setNewUsername('');
+      setNewPassword('');
+      setNewRole('user');
+      await loadUsers();
     } catch (error: unknown) {
       setMsg(getErrorMessage(error));
     } finally {
@@ -253,31 +379,38 @@ export default function Admin() {
     }
   }
 
-  async function createLink(mailboxEmail?: string) {
+  function openBulkLinkModal() {
+    if (selectedMailboxes.size === 0) return;
+    setBatchLinkMaxViews(DEFAULT_BATCH_LINK_MAX_VIEWS);
+    setBatchLinkExpiresDays(DEFAULT_BATCH_LINK_EXPIRES_DAYS);
+    setBatchLinkModalOpen(true);
+  }
+
+  async function executeBulkCreateLink() {
     setLoading(true);
     try {
-      const emailsToProcess = mailboxEmail ? [mailboxEmail] : Array.from(selectedMailboxes);
+      const emailsToProcess = Array.from(selectedMailboxes);
       if (emailsToProcess.length === 0) {
         setMsg('请先选择要生成链接的邮箱');
         setLoading(false);
         return;
       }
 
-      const response = await requestJson<ShareLinksResponse>('/api/admin/share-links', {
+      const linkOptions = parseBatchShareLinkOptions({
+        maxViews: batchLinkMaxViews,
+        expiresInDays: batchLinkExpiresDays,
+      });
+      await requestJson<ShareLinksResponse>('/api/admin/share-links', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mailboxEmails: emailsToProcess,
-          maxViews: Number(maxViews) || 0,
-          expiresInMinutes: Number(expiresMin) || 0,
+          maxViews: linkOptions.maxViews,
+          expiresInDays: linkOptions.expiresInDays,
         }),
       });
-      if (response.url && emailsToProcess.length === 1) {
-        navigator.clipboard?.writeText(response.url).catch(() => {});
-        setMsg(`链接已生成：${response.url || ''}`);
-      } else {
-        setMsg(`已为 ${emailsToProcess.length} 个邮箱生成链接`);
-      }
+      setBatchLinkModalOpen(false);
+      setMsg(`已为 ${emailsToProcess.length} 个邮箱生成链接，旧的剩余次数和天数已覆盖`);
       setSelectedMailboxes(new Set());
       await loadAll();
     } catch (error: unknown) {
@@ -308,18 +441,21 @@ export default function Admin() {
     }
   }
 
-  async function bulkEditGroup() {
+  function openBulkGroupModal() {
     if (selectedMailboxes.size === 0) return;
-    const newGroup = prompt(`请输入为选中的 ${selectedMailboxes.size} 个邮箱设置的新分组名称：\n(留空表示清除分组)`);
-    if (newGroup === null) return; // User cancelled
-    
+    setBulkGroupInput('');
+    setBulkGroupModalOpen(true);
+  }
+
+  async function executeBulkGroup() {
+    setBulkGroupModalOpen(false);
     setLoading(true);
     try {
       const emails = Array.from(selectedMailboxes).join(',');
       await requestJson<{ success: boolean }>('/api/admin/mailboxes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emails, group: newGroup, mode: 'bulk' }),
+        body: JSON.stringify({ emails, group: bulkGroupInput, mode: 'bulk' }),
       });
       setMsg(`已更新 ${selectedMailboxes.size} 个邮箱的分组`);
       setSelectedMailboxes(new Set());
@@ -366,9 +502,13 @@ export default function Admin() {
     URL.revokeObjectURL(url);
   }
 
-  async function bulkDeleteMailboxes() {
+  function openBulkDeleteModal() {
     if (selectedMailboxes.size === 0) return;
-    if (!confirm(`确定要删除选中的 ${selectedMailboxes.size} 个邮箱及相关邮件和链接吗？`)) return;
+    setBulkDeleteModalOpen(true);
+  }
+
+  async function executeBulkDelete() {
+    setBulkDeleteModalOpen(false);
     setLoading(true);
     try {
       const emails = Array.from(selectedMailboxes).join(',');
@@ -400,22 +540,38 @@ export default function Admin() {
     }
   }
 
-  async function createFromDynmsl() {
+  async function deleteMailbox(email: string) {
+    if (!confirm(`删除邮箱「${email}」及相关邮件和链接？`)) return;
+    setLoading(true);
+    try {
+      await requestJson<{ success: boolean }>(`/api/admin/mailboxes?emails=${encodeURIComponent(email)}`, {
+        method: 'DELETE',
+      });
+      setMsg(`已删除邮箱：${email}`);
+      await loadAll();
+    } catch (error: unknown) {
+      setMsg(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createProviderAccounts() {
     setLoading(true);
     setMsg('');
     setLastCreated([]);
     try {
-      const response = await requestJson<DynmslCreateResponse>('/api/admin/dynmsl/create', {
+      const response = await requestJson<ProviderAccountCreateResponse>('/api/admin/provider-accounts/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          count: dynCount,
-          prefix: dynPrefix,
-          charType: dynCharType,
-          charLength: dynCharLen,
-          maxViews: dynMaxViews,
-          expiresInMinutes: dynExpiresMin,
-          note: note || 'dynmsl',
+          count: createCount,
+          prefix: createPrefix,
+          charType: createCharType,
+          charLength: createCharLen,
+          maxViews: createMaxViews,
+          expiresInMinutes: createExpiresMin,
+          note: note || 'provider',
           group,
           providerId: selectedProviderId || undefined,
         }),
@@ -534,6 +690,10 @@ export default function Admin() {
     });
   }
 
+  const totalPages = Math.ceil(mailboxes.length / pageSize) || 1;
+  const validCurrentPage = clamp(currentPage, 1, totalPages);
+  const paginatedMailboxes = mailboxes.slice((validCurrentPage - 1) * pageSize, validCurrentPage * pageSize);
+
   if (!authed) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
@@ -553,8 +713,24 @@ export default function Admin() {
           <div className="bg-white py-8 px-4 shadow-xl shadow-gray-200/50 sm:rounded-2xl sm:px-10 border border-gray-100">
             <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); void login(); }}>
               <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700">
+                  用户名
+                </label>
+                <div className="mt-2">
+                  <input
+                    id="username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={authMode === 'bootstrap' ? '首个管理员用户名' : '请输入用户名'}
+                    className="appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div>
                 <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                  管理员密码
+                  密码
                 </label>
                 <div className="mt-2">
                   <input
@@ -562,7 +738,7 @@ export default function Admin() {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="若未设置密码请留空"
+                    placeholder={authMode === 'bootstrap' ? '设置管理员密码' : '请输入密码'}
                     className="appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm transition-colors"
                   />
                 </div>
@@ -574,7 +750,7 @@ export default function Admin() {
                   disabled={loading}
                   className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 transition-colors"
                 >
-                  {loading ? '登录中...' : '登录'}
+                  {loading ? '提交中...' : authMode === 'bootstrap' ? '初始化管理员' : '登录'}
                 </button>
               </div>
             </form>
@@ -587,7 +763,7 @@ export default function Admin() {
             )}
           </div>
           <p className="mt-6 text-center text-xs text-gray-500">
-            首次使用请将 .env.example 复制为 .env.local 并配置密码和提供商信息。
+            {authMode === 'bootstrap' ? '首次进入请先创建管理员，创建后将关闭游客注册。' : '仅已创建用户可登录后台。'}
           </p>
         </div>
       </div>
@@ -605,16 +781,20 @@ export default function Admin() {
             </div>
             <h1 className="font-bold text-lg tracking-tight">CloudMail 管理后台</h1>
           </div>
-          <button
-            onClick={() => {
-              document.cookie = 'cm_admin=; Max-Age=0; path=/';
-              location.reload();
-            }}
-            className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-100"
-          >
-            <LogOut className="w-4 h-4" />
-            退出登录
-          </button>
+          <div className="flex items-center gap-3">
+            {currentUser && (
+              <div className="text-sm text-gray-500">
+                {currentUser.username} / {currentUser.role === 'admin' ? '管理员' : '用户'}
+              </div>
+            )}
+            <button
+              onClick={() => void logout()}
+              className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-100"
+            >
+              <LogOut className="w-4 h-4" />
+              退出登录
+            </button>
+          </div>
         </div>
       </header>
 
@@ -626,6 +806,37 @@ export default function Admin() {
             <CheckCircle2 className="w-5 h-5 text-blue-500 shrink-0" />
             {msg}
           </div>
+        )}
+
+        {currentUser?.role === 'admin' && (
+          <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div>
+                <h2 className="font-semibold text-gray-800">用户管理</h2>
+                <p className="text-sm text-gray-500 mt-1">只有管理员可以创建新用户；游客注册已关闭。</p>
+              </div>
+              <div className="text-sm text-gray-500">共 {users.length} 个用户</div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder="用户名" className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" />
+              <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="密码" type="password" className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" />
+              <select value={newRole} onChange={(e) => setNewRole(e.target.value === 'admin' ? 'admin' : 'user')} className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors">
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
+              </select>
+              <button onClick={() => void createManagedUser()} disabled={loading} className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">
+                创建用户
+              </button>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {users.map((user) => (
+                <span key={user.id} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-100 text-sm text-gray-700">
+                  {user.username}
+                  <span className="text-xs text-gray-500">({user.role === 'admin' ? '管理员' : '用户'})</span>
+                </span>
+              ))}
+            </div>
+          </section>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -750,11 +961,11 @@ export default function Admin() {
                   
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">数量</label>
-                    <input type="number" value={dynCount} onChange={(e) => setDynCount(clamp(Number(e.target.value), 1, 100))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <input type="number" value={createCount} onChange={(e) => setCreateCount(clamp(Number(e.target.value), 1, 100))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">前缀</label>
-                    <input value={dynPrefix} onChange={(e) => setDynPrefix(e.target.value)} placeholder="可选" className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <input value={createPrefix} onChange={(e) => setCreatePrefix(e.target.value)} placeholder="可选" className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">分组</label>
@@ -772,7 +983,7 @@ export default function Admin() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">类型</label>
-                    <select value={dynCharType} onChange={(e) => setDynCharType(normalizeCharType(e.target.value))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    <select value={createCharType} onChange={(e) => setCreateCharType(normalizeCharType(e.target.value))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
                       <option value="mixed">混合(Mixed)</option>
                       <option value="number">数字(Number)</option>
                       <option value="english">英文(English)</option>
@@ -780,19 +991,19 @@ export default function Admin() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">长度</label>
-                    <input type="number" value={dynCharLen} onChange={(e) => setDynCharLen(clamp(Number(e.target.value), 4, 20))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <input type="number" value={createCharLen} onChange={(e) => setCreateCharLen(clamp(Number(e.target.value), 4, 20))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">最大查看次数(0=无限)</label>
-                    <input type="number" value={dynMaxViews} onChange={(e) => setDynMaxViews(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <input type="number" value={createMaxViews} onChange={(e) => setCreateMaxViews(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-emerald-800 mb-1.5">有效期(分钟, 0=无限)</label>
-                    <input type="number" value={dynExpiresMin} onChange={(e) => setDynExpiresMin(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <input type="number" value={createExpiresMin} onChange={(e) => setCreateExpiresMin(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                   </div>
                   <div className="col-span-2 flex justify-end mt-2">
                     <button 
-                      onClick={() => void createFromDynmsl()} 
+                      onClick={() => void createProviderAccounts()} 
                       disabled={loading} 
                       className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
                     >
@@ -869,8 +1080,6 @@ export default function Admin() {
                     <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="分组(可选)" className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" title="分组" />
                   </div>
                   <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="标题/备注 (可选)" className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" title="标题/备注" />
-                  <input type="number" value={maxViews} onChange={(e) => setMaxViews(Number(e.target.value))} placeholder="最大查看次数 (0=无限)" className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" title="最大查看次数" />
-                  <input type="number" value={expiresMin} onChange={(e) => setExpiresMin(Number(e.target.value))} placeholder="有效期(分钟, 0=无限)" className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" title="有效期分钟" />
                 </div>
                 <button onClick={() => void addSingle()} disabled={loading} className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-medium rounded-lg transition-colors">
                   添加邮箱
@@ -892,7 +1101,7 @@ export default function Admin() {
                 <textarea
                   value={bulkText}
                   onChange={(e) => setBulkText(e.target.value)}
-                  placeholder="kukaxsmx@dynmsl.com&#10;abc123@dynmsl.com"
+                  placeholder="user01@mail-provider.example&#10;user02@mail-provider.example"
                   className="w-full h-24 font-mono text-xs p-3 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none transition-colors"
                 />
                 <div className="flex flex-wrap gap-2">
@@ -963,14 +1172,14 @@ export default function Admin() {
                     已选择 {selectedMailboxes.size} 项
                   </span>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => void bulkDeleteMailboxes()} className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
+                    <button onClick={() => openBulkDeleteModal()} className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
                       <Trash2 className="w-3.5 h-3.5" />
                       批量删除
                     </button>
-                    <button onClick={() => void bulkEditGroup()} className="px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
+                    <button onClick={() => openBulkGroupModal()} className="px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
                       批量编辑分组
                     </button>
-                    <button onClick={() => void createLink()} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
+                    <button onClick={openBulkLinkModal} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5">
                       <LinkIcon className="w-3.5 h-3.5" />
                       批量生成链接
                     </button>
@@ -982,7 +1191,7 @@ export default function Admin() {
                 </div>
               )}
 
-              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <div className="overflow-x-auto min-h-[650px]">
                 {mailboxes.length === 0 ? (
                   <div className="p-8 text-center text-sm text-gray-500">暂无匹配的邮箱</div>
                 ) : (
@@ -992,12 +1201,16 @@ export default function Admin() {
                         <th className="w-8 px-3 py-2">
                           <input 
                             type="checkbox" 
-                            checked={selectedMailboxes.size === mailboxes.length && mailboxes.length > 0}
+                            checked={selectedMailboxes.size > 0 && paginatedMailboxes.every(m => selectedMailboxes.has(m.email))}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                setSelectedMailboxes(new Set(mailboxes.map(m => m.email)));
+                                const newSet = new Set(selectedMailboxes);
+                                paginatedMailboxes.forEach(m => newSet.add(m.email));
+                                setSelectedMailboxes(newSet);
                               } else {
-                                setSelectedMailboxes(new Set());
+                                const newSet = new Set(selectedMailboxes);
+                                paginatedMailboxes.forEach(m => newSet.delete(m.email));
+                                setSelectedMailboxes(newSet);
                               }
                             }}
                             className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
@@ -1014,8 +1227,9 @@ export default function Admin() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 bg-white">
-                      {mailboxes.map((mb, index) => {
+                      {paginatedMailboxes.map((mb, index) => {
                         const link = mb.shareLinks && mb.shareLinks.length > 0 ? mb.shareLinks[0] : null;
+                        const absoluteIndex = (validCurrentPage - 1) * pageSize + index + 1;
                         const base = typeof window !== 'undefined' ? window.location.origin : '';
                         const openUrl = link ? `${base}/open/${link.token}` : '';
                         const apiUrl = link ? `${base}/api/open/${link.token}?format=json` : '';
@@ -1069,12 +1283,12 @@ export default function Admin() {
                               />
                             </td>
                             <td className="px-3 py-3 text-gray-700 text-xs font-mono">
-                              {index + 1}
+                              {absoluteIndex}
                             </td>
                             <td className="px-3 py-3">
                               <div className="font-mono text-sm text-gray-900 flex items-center gap-1.5 flex-wrap">
                                 {mb.email}
-                                {mb.source === 'dynmsl' && <span className="px-1 py-0.5 rounded text-[9px] bg-emerald-100 text-emerald-700">dynmsl</span>}
+                                {mb.source === 'provider' && <span className="px-1 py-0.5 rounded text-[9px] bg-emerald-100 text-emerald-700">provider</span>}
                                 {mb.provider_id && providerMap.get(mb.provider_id) && (
                                   <span className="px-1 py-0.5 rounded text-[9px] bg-gray-100 text-gray-600">{providerMap.get(mb.provider_id)?.name}</span>
                                 )}
@@ -1127,8 +1341,8 @@ export default function Admin() {
                                     <Copy className="w-3.5 h-3.5" />
                                   </button>
                                 )}
-                                <button onClick={() => void createLink(mb.email)} className="px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded transition-colors whitespace-nowrap">
-                                  生成链接
+                                <button onClick={() => void deleteMailbox(mb.email)} className="px-2.5 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded transition-colors whitespace-nowrap">
+                                  删除
                                 </button>
                               </div>
                             </td>
@@ -1139,10 +1353,170 @@ export default function Admin() {
                   </table>
                 )}
               </div>
+              
+              {mailboxes.length > 0 && (
+                <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
+                  <div className="text-sm text-gray-500">
+                    共 {mailboxes.length} 条记录，当前显示第 {(validCurrentPage - 1) * pageSize + 1} 到 {Math.min(validCurrentPage * pageSize, mailboxes.length)} 条
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      className="px-2 py-1.5 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value={20}>20条/页</option>
+                      <option value={50}>50条/页</option>
+                      <option value={100}>100条/页</option>
+                    </select>
+                    <button
+                      disabled={validCurrentPage <= 1}
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      className="px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm disabled:opacity-50 hover:bg-gray-50"
+                    >
+                      上一页
+                    </button>
+                    <span className="text-sm text-gray-600 px-2">
+                      {validCurrentPage} / {totalPages}
+                    </span>
+                    <button
+                      disabled={validCurrentPage >= totalPages}
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      className="px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm disabled:opacity-50 hover:bg-gray-50"
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
           </div>
         </div>
       </main>
+
+      {/* Modals */}
+      {bulkGroupModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+              <h3 className="font-semibold text-gray-900">批量编辑分组</h3>
+            </div>
+            <div className="p-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                为选中的 <span className="font-bold text-emerald-600">{selectedMailboxes.size}</span> 个邮箱设置新分组名称
+              </label>
+              <input
+                autoFocus
+                value={bulkGroupInput}
+                onChange={(e) => setBulkGroupInput(e.target.value)}
+                placeholder="留空表示清除分组"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => setBulkGroupModalOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void executeBulkGroup()}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700"
+              >
+                确认
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkDeleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-2 bg-red-50/50">
+              <AlertCircle className="w-5 h-5 text-red-500" />
+              <h3 className="font-semibold text-gray-900">确认批量删除</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-gray-600">
+                确定要删除选中的 <span className="font-bold text-red-600">{selectedMailboxes.size}</span> 个邮箱及相关邮件和链接吗？此操作无法恢复。
+              </p>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => setBulkDeleteModalOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void executeBulkDelete()}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700"
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchLinkModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-emerald-50/50">
+              <h3 className="font-semibold text-gray-900">批量生成链接</h3>
+              <span className="text-xs text-emerald-700">默认 100 次 / 30 天</span>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600">
+                将为选中的 <span className="font-bold text-emerald-600">{selectedMailboxes.size}</span> 个邮箱重新生成链接。
+                如果已有剩余次数和剩余天数，会直接覆盖为新的设置。
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">次数</label>
+                <input
+                  autoFocus
+                  type="number"
+                  min={0}
+                  value={batchLinkMaxViews}
+                  onChange={(e) => setBatchLinkMaxViews(Math.max(0, Number(e.target.value)))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="mt-1 text-xs text-gray-400">0 表示不限次数</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">剩余天数</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={batchLinkExpiresDays}
+                  onChange={(e) => setBatchLinkExpiresDays(Math.max(0, Number(e.target.value)))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="mt-1 text-xs text-gray-400">0 表示永不过期</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => setBatchLinkModalOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void executeBulkCreateLink()}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700"
+              >
+                确认生成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

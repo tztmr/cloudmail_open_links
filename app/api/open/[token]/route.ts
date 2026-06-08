@@ -37,8 +37,8 @@ export async function GET(
   let syncResult: { fetched: number; inserted: number; skipped: number } | null = null;
   let syncError: string | null = null;
   try {
-    const mailbox = await getMailboxByEmail(link.mailbox_email);
-    const providers = await listProviders();
+    const mailbox = await getMailboxByEmail(link.mailbox_email, link.owner_user_id);
+    const providers = await listProviders(link.owner_user_id);
     const provider = resolveProviderForMailbox(
       mailbox || { email: link.mailbox_email, provider_id: null },
       providers
@@ -48,15 +48,15 @@ export async function GET(
       syncResult = await syncMailboxFromProvider({
         mailboxEmail: link.mailbox_email,
         provider,
-        hasMessageId: (messageId) => hasReceivedEmailMessageId(link.mailbox_email, messageId),
-        saveEmail: (email) => insertReceivedEmail(email),
+        hasMessageId: (messageId) => hasReceivedEmailMessageId(link.mailbox_email, messageId, link.owner_user_id),
+        saveEmail: (email) => insertReceivedEmail({ ...email, owner_user_id: link.owner_user_id }),
       });
     }
   } catch (e: unknown) {
     syncError = e instanceof Error ? e.message : 'Sync failed';
   }
 
-  const emails = await listReceivedForMailbox(link.mailbox_email, 1);
+  const emails = await listReceivedForMailbox(link.mailbox_email, 1, link.owner_user_id);
 
   const base = process.env.PUBLIC_BASE_URL || '';
   const url = base ? `${base.replace(/\/$/, '')}/open/${token}` : null;

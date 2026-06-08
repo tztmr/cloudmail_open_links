@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin';
-import { addUsers, generateDynmslAccount, type AddUsersResponse, type ProviderCreds } from '@/lib/dynmsl';
+import { requireUser } from '@/lib/admin';
+import { addUsers, generateMailboxAccount, type AddUsersResponse, type ProviderCreds } from '@/lib/provider-account';
 import { upsertMailbox, createShareLink, getProvider } from '@/lib/db';
 
 export const runtime = 'nodejs';
 
-type DynmslCreateBody = {
+type ProviderAccountCreateBody = {
   count?: number;
   prefix?: string;
   charType?: 'number' | 'english' | 'mixed';
@@ -31,14 +31,15 @@ type CreatedAccountResult = {
 };
 
 export async function POST(req: NextRequest) {
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
-    const body = await req.json() as DynmslCreateBody;
+    const body = await req.json() as ProviderAccountCreateBody;
 
     const count = Math.min(Math.max(Number(body.count) || 5, 1), 100);
     const prefix = String(body.prefix || '').trim();
@@ -48,12 +49,12 @@ export async function POST(req: NextRequest) {
     const linkMaxViews = Math.max(0, Number(body.maxViews || 0));
     const linkExpiresMin = Math.max(0, Number(body.expiresInMinutes || 0));
 
-    // Resolve provider (preferred) or fall back to env
     let creds: ProviderCreds | undefined;
     let providerName = 'env';
+    let providerDomain: string | null = null;
     let emailDomain: string | null = null;
     if (body.providerId) {
-      const prov = await getProvider(String(body.providerId));
+      const prov = await getProvider(String(body.providerId), viewer.role === 'admin' ? undefined : viewer.id);
       if (!prov) {
         return NextResponse.json({ success: false, error: 'Provider not found' }, { status: 404 });
       }
@@ -62,17 +63,16 @@ export async function POST(req: NextRequest) {
         token: prov.token,
       };
       providerName = prov.name;
+      providerDomain = prov.domain;
       emailDomain = prov.email_domain || null;
     }
 
-    // 1. Generate accounts (respect provider emailDomain if set)
     const accounts: Array<{ email: string; password: string }> = [];
     for (let i = 0; i < count; i++) {
-      const acc = generateDynmslAccount(prefix, charLength, charType, emailDomain);
+      const acc = generateMailboxAccount(prefix, charLength, charType, emailDomain, providerDomain);
       accounts.push(acc);
     }
 
-    // 2. Call upstream with the right creds
     let upstreamOk = false;
     let upstreamResult: AddUsersResponse | null = null;
     try {
@@ -98,7 +98,6 @@ export async function POST(req: NextRequest) {
       }, { status: 502 });
     }
 
-    // 3. Save locally + auto create share links
     const results: CreatedAccountResult[] = [];
     const base = process.env.PUBLIC_BASE_URL || '';
 
@@ -107,12 +106,13 @@ export async function POST(req: NextRequest) {
         acc.email,
         body.note || providerName,
         acc.password,
-        'dynmsl',
+        'provider',
         body.providerId || null,
-        body.group || null
+        body.group || null,
+        viewer.id,
       );
 
-      const link = await createShareLink(acc.email, linkMaxViews, linkExpiresMin);
+      const link = await createShareLink(acc.email, linkMaxViews, linkExpiresMin, viewer.id);
 
       const openUrl = base
         ? `${base.replace(/\/$/, '')}/open/${link.token}`
@@ -141,7 +141,7 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (error: unknown) {
-    console.error('dynmsl create error', error);
+    console.error('provider account create error', error);
     return NextResponse.json({
       success: false,
       error: error instanceof Error ? error.message : 'Internal error',

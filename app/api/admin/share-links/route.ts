@@ -1,28 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin';
-import { createShareLink, listShareLinks } from '@/lib/db';
+import { requireUser } from '@/lib/admin';
+import { createShareLink, deleteShareLink, getMailboxByEmail, listShareLinks } from '@/lib/db';
+import { parseBatchShareLinkOptions } from '@/lib/share-link-settings';
 import { ensureSyncRuntimeStarted } from '@/lib/sync-runtime';
 
 export async function GET() {
   ensureSyncRuntimeStarted();
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const links = await listShareLinks(500);
+  const links = await listShareLinks(500, viewer.role === 'admin' ? undefined : viewer.id);
   return NextResponse.json({ success: true, shareLinks: links });
 }
 
 export async function POST(req: NextRequest) {
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const body = await req.json().catch(() => ({}));
-  const { mailboxEmail, mailboxEmails, maxViews, expiresInMinutes } = body;
+  const { mailboxEmail, mailboxEmails } = body;
+  const linkOptions = parseBatchShareLinkOptions(body);
 
   const emails = mailboxEmails || (mailboxEmail ? [mailboxEmail] : []);
   if (!emails.length) {
@@ -35,10 +39,15 @@ export async function POST(req: NextRequest) {
 
   for (const email of emails) {
     if (!email || !email.includes('@')) continue;
+    const mailbox = await getMailboxByEmail(String(email));
+    const ownerUserId = viewer.role === 'admin'
+      ? (mailbox?.owner_user_id || viewer.id)
+      : viewer.id;
     const link = await createShareLink(
       email,
-      Number(maxViews) || 0,
-      Number(expiresInMinutes) || 0
+      linkOptions.maxViews,
+      linkOptions.expiresInMinutes,
+      ownerUserId,
     );
     createdLinks.push(link);
     urls.push(`${base.replace(/\/$/, '')}/open/${link.token}`);
@@ -54,8 +63,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  let viewer;
   try {
-    await requireAdmin();
+    viewer = await requireUser();
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -63,7 +73,6 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
-  const ShareLink = (await import('@/models/ShareLink')).default;
-  await ShareLink.deleteOne({ _id: id });
+  await deleteShareLink(id, viewer.role === 'admin' ? undefined : viewer.id);
   return NextResponse.json({ success: true });
 }

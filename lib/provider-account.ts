@@ -1,6 +1,5 @@
-// Dynmsl / cloudmail upstream client
-// Compatible with the API used in dx888_cloudmail (addUser + public endpoints)
-// Now supports multiple providers (different domain + token)
+// Generic upstream mailbox account client.
+// Compatible with addUser-style providers that expose public mail APIs.
 
 let cachedConfig: { baseUrl: string; headers: Headers } | null = null;
 let cachedKey = '';
@@ -9,26 +8,47 @@ function normalizeBaseUrl(url: string) {
   return url.replace(/\/+$/, '');
 }
 
+function normalizeHostname(hostname: string) {
+  return hostname.replace(/^mail\./i, '').replace(/\.$/, '').toLowerCase();
+}
+
+export function inferEmailDomainFromProviderUrl(url?: string | null): string | null {
+  if (!url) return null;
+
+  try {
+    const parsed = new URL(url);
+    const hostname = normalizeHostname(parsed.hostname);
+    return hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 export type ProviderCreds = {
-  domain: string;   // e.g. https://mail.dynmsl.com
+  domain: string;
   token: string;
   wafBypass?: string | null;
+  wafBypassHeader?: string | null;
 };
 
 function getConfig(creds?: ProviderCreds) {
   const baseUrl = normalizeBaseUrl(
     creds?.domain ||
-    process.env.DYNMSL_API_BASE_URL ||
-    'https://mail.dynmsl.com/api/public'
+    process.env.MAIL_PROVIDER_API_BASE_URL ||
+    'https://mail.example.com/api/public'
   );
-  const apiToken = creds?.token || process.env.DYNMSL_API_TOKEN;
-  const wafBypass = creds?.wafBypass || process.env.DYNMSL_WAF_BYPASS_TOKEN;
+  const apiToken = creds?.token || process.env.MAIL_PROVIDER_API_TOKEN;
+  const wafBypass = creds?.wafBypass || process.env.MAIL_PROVIDER_WAF_BYPASS_TOKEN;
+  const wafBypassHeader =
+    creds?.wafBypassHeader ||
+    process.env.MAIL_PROVIDER_WAF_BYPASS_HEADER ||
+    'X-WAF-BYPASS';
 
   if (!apiToken) {
-    throw new Error('No API token provided (neither in creds nor DYNMSL_API_TOKEN env)');
+    throw new Error('No API token provided (neither in creds nor MAIL_PROVIDER_API_TOKEN env)');
   }
 
-  const key = `${baseUrl}::${apiToken}::${wafBypass || ''}`;
+  const key = `${baseUrl}::${apiToken}::${wafBypassHeader}::${wafBypass || ''}`;
   if (cachedConfig && cachedKey === key) return cachedConfig;
 
   const headers = new Headers();
@@ -36,7 +56,7 @@ function getConfig(creds?: ProviderCreds) {
   headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json, text/plain, */*');
   headers.set('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
-  if (wafBypass) headers.set('X-DYNMSL-WAF-BYPASS', wafBypass);
+  if (wafBypass) headers.set(wafBypassHeader, wafBypass);
 
   cachedConfig = { baseUrl, headers };
   cachedKey = key;
@@ -91,10 +111,6 @@ export async function addUsers(list: AddUserItem[], creds?: ProviderCreds): Prom
   return postJson<AddUsersResponse>('/addUser', { list }, 20000, creds);
 }
 
-export function isDynmslEmail(email: string): boolean {
-  return /@dynmsl\.com$/i.test(email.trim());
-}
-
 // Simple random generator (ported logic from original project, avoiding ambiguous chars)
 export function generateRandomString(length: number, type: 'number' | 'english' | 'mixed' = 'mixed'): string {
   const numbers = '2345689';
@@ -112,15 +128,19 @@ export function generateRandomString(length: number, type: 'number' | 'english' 
   return result;
 }
 
-export function generateDynmslAccount(
+export function generateMailboxAccount(
   prefix = '',
   length = 8,
   type: 'number' | 'english' | 'mixed' = 'mixed',
-  emailDomain?: string | null
+  emailDomain?: string | null,
+  providerUrl?: string | null
 ) {
   const random = generateRandomString(length, type);
-  const domain = (emailDomain && emailDomain.trim()) ? emailDomain.trim() : 'dynmsl.com';
-  const email = `${prefix}${random}@${domain}`.toLowerCase().replace(/@+/, '@'); // safety
+  const domain =
+    (emailDomain && emailDomain.trim()) ||
+    inferEmailDomainFromProviderUrl(providerUrl) ||
+    'mail.example.com';
+  const email = `${prefix}${random}@${domain}`.toLowerCase().replace(/@+/, '@');
   const password = generateRandomString(10, 'mixed');
   return { email, password };
 }
