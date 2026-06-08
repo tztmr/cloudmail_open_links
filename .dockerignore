@@ -1,0 +1,14 @@
+node_modules
+.next
+data
+*.db
+*.db-*
+.git
+.env
+.env.*
+Dockerfile
+docker-compose.yml
+README.md
+*.md
+receiver/
+cloudmail-open-receiver.sh

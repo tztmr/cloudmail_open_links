@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    container_name: cloudmail-open-links
+    ports:
+      - "4138:3000"  # changed to 4138 as requested
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongo:27017/cloudmail_open_links
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:3000}
+      - DYNMSL_API_TOKEN=${DYNMSL_API_TOKEN:-}
+      - DYNMSL_API_BASE_URL=${DYNMSL_API_BASE_URL:-https://mail.dynmsl.com/api/public}
+      - DYNMSL_WAF_BYPASS_TOKEN=${DYNMSL_WAF_BYPASS_TOKEN:-}
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: cloudmail-mongo
+    volumes:
+      - mongo_data:/data/db
+    # ports:
+    #   - "27017:27017"   # optional: comment out if 27017 is already used locally
+    #   Use 27018:27017 if you want to expose it
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
