@@ -194,3 +194,33 @@ test('syncAllMailboxesFromProviders 只同步能匹配到 provider 的邮箱', a
     skipped: 1,
   });
 });
+
+test('syncAllMailboxesFromProviders 将 owner_user_id 透传给同步器', async () => {
+  const calls: Array<{ mailboxEmail: string; ownerUserId?: string; providerId: string }> = [];
+
+  const stats = await syncAllMailboxesFromProviders({
+    mailboxes: [
+      { email: 'first@hidden-provider.example', provider_id: null, owner_user_id: 'user-1' },
+    ],
+    providers: [
+      { id: 'p-1', name: 'Primary Provider', domain: 'https://mail.hidden-provider.example/api/public', token: 'secret-token', email_domain: 'hidden-provider.example' },
+    ],
+    syncMailbox: async ({ mailboxEmail, ownerUserId, provider }) => {
+      calls.push({ mailboxEmail, ownerUserId, providerId: provider.id });
+      return { fetched: 1, inserted: 1, skipped: 0 };
+    },
+  });
+
+  assert.deepEqual(calls, [
+    { mailboxEmail: 'first@hidden-provider.example', ownerUserId: 'user-1', providerId: 'p-1' },
+  ]);
+
+  assert.deepEqual(stats, {
+    total_mailboxes: 1,
+    synced_mailboxes: 1,
+    unmatched_mailboxes: 0,
+    fetched: 1,
+    inserted: 1,
+    skipped: 0,
+  });
+});

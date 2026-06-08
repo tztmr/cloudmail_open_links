@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  consumeShareLinkView,
   getMailboxByEmail,
   getShareLinkByToken,
   hasReceivedEmailMessageId,
-  incrementShareView,
   insertReceivedEmail,
   listProviders,
   listReceivedForMailbox,
@@ -12,6 +12,10 @@ import { resolveProviderForMailbox, syncMailboxFromProvider } from '@/lib/mail-s
 import { ensureSyncRuntimeStarted } from '@/lib/sync-runtime';
 
 export const runtime = 'nodejs';
+
+function getEmailFingerprint(email?: { message_id?: string | null; id?: string | null }) {
+  return String(email?.message_id || email?.id || '').trim() || null;
+}
 
 export async function GET(
   req: NextRequest,
@@ -27,11 +31,6 @@ export async function GET(
   const now = Date.now();
   if (link.expires_at && now > new Date(link.expires_at).getTime()) {
     return NextResponse.json({ error: 'Link expired' }, { status: 410 });
-  }
-
-  const inc = await incrementShareView(token);
-  if (!inc.ok) {
-    return NextResponse.json({ error: 'View limit reached or link expired' }, { status: 429 });
   }
 
   let syncResult: { fetched: number; inserted: number; skipped: number } | null = null;
@@ -57,6 +56,11 @@ export async function GET(
   }
 
   const emails = await listReceivedForMailbox(link.mailbox_email, 1, link.owner_user_id);
+  const currentEmailFingerprint = getEmailFingerprint(emails[0]);
+  const consumeResult = await consumeShareLinkView(token, currentEmailFingerprint);
+  if (!consumeResult.ok) {
+    return NextResponse.json({ error: 'View limit reached or link expired' }, { status: 429 });
+  }
 
   const base = process.env.PUBLIC_BASE_URL || '';
   const url = base ? `${base.replace(/\/$/, '')}/open/${token}` : null;
@@ -70,8 +74,8 @@ export async function GET(
     link: {
       token: link.token,
       max_views: link.max_views,
-      views_used: link.views_used + (inc.ok ? 1 : 0),
-      remaining: inc.remaining,
+      views_used: consumeResult.views_used ?? link.views_used,
+      remaining: consumeResult.remaining,
       expires_at: link.expires_at,
     },
     emails: emails.map((e) => ({

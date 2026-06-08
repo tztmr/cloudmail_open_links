@@ -8,6 +8,8 @@ export type OpenEmailItem = {
   has_html?: boolean;
 };
 
+export const OPEN_MAIL_POLL_INTERVAL_MS = 5000;
+
 type OpenLink = {
   expires_at?: string | null;
   remaining?: number | null;
@@ -35,6 +37,16 @@ export type OpenData = {
   error?: string;
 };
 
+type VerificationCodeSource = {
+  subject?: string | null;
+  text_body?: string | null;
+  html_body?: string | null;
+};
+
+type ClipboardLike = {
+  writeText: (text: string) => Promise<void>;
+};
+
 export function normalizeOpenData(data: RawOpenData): OpenData {
   return {
     ...data,
@@ -45,4 +57,24 @@ export function normalizeOpenData(data: RawOpenData): OpenData {
         }))
       : [],
   };
+}
+
+export function extractVerificationCode(source: VerificationCodeSource): string | null {
+  const segments = [source.subject, source.text_body, source.html_body];
+
+  for (const segment of segments) {
+    if (!segment) continue;
+    const match = segment.match(/(^|[^\d])(\d{4,8})(?!\d)/);
+    if (match?.[2]) return match[2];
+  }
+
+  return null;
+}
+
+export async function copyTextToClipboard(clipboard: ClipboardLike | null | undefined, text: string) {
+  if (!clipboard?.writeText) {
+    throw new Error('当前环境不支持剪贴板');
+  }
+
+  await clipboard.writeText(text);
 }

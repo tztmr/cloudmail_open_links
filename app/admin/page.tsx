@@ -21,6 +21,7 @@ import {
   DEFAULT_BATCH_LINK_MAX_VIEWS,
   parseBatchShareLinkOptions,
 } from '@/lib/share-link-settings';
+import { findUsersByUsername, getBootstrapRequestsForRole } from '@/lib/mailbox-admin-utils';
 
 type CharType = 'mixed' | 'number' | 'english';
 
@@ -44,6 +45,7 @@ type ShareLink = {
 
 type Mailbox = {
   id: string;
+  owner_user_id: string;
   email: string;
   note?: string | null;
   group?: string | null;
@@ -180,6 +182,8 @@ export default function Admin() {
   const [batchLinkMaxViews, setBatchLinkMaxViews] = useState(DEFAULT_BATCH_LINK_MAX_VIEWS);
   const [batchLinkExpiresDays, setBatchLinkExpiresDays] = useState(DEFAULT_BATCH_LINK_EXPIRES_DAYS);
   const [queryGroup, setQueryGroup] = useState('');
+  const [queryOwnerInput, setQueryOwnerInput] = useState('');
+  const [queryOwnerUsername, setQueryOwnerUsername] = useState('');
   const [queryLimit, setQueryLimit] = useState(999999);
   const [selectedMailboxes, setSelectedMailboxes] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -208,24 +212,49 @@ export default function Admin() {
     return map;
   }, [providers]);
 
+  const userMap = useMemo(() => {
+    const map = new Map<string, ManagedUser>();
+    users.forEach((user) => {
+      map.set(user.id, user);
+    });
+    return map;
+  }, [users]);
+
   const availableGroups = useMemo(() => {
     const s = new Set<string>();
     mailboxes.forEach((m) => { if (m.group) s.add(m.group); });
     return Array.from(s).sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [mailboxes]);
 
-  async function loadAll(overrideGroup?: string) {
+  const ownerSuggestions = useMemo(() => {
+    if (currentUser?.role !== 'admin') return [];
+    return findUsersByUsername(users, queryOwnerInput).slice(0, 8);
+  }, [currentUser?.role, queryOwnerInput, users]);
+
+  async function loadAll(
+    overrideGroup?: string,
+    overrideOwnerUsername?: string,
+    roleOverride?: CurrentUser['role'],
+  ) {
     const g = overrideGroup !== undefined ? overrideGroup : queryGroup;
+    const ownerUsername = overrideOwnerUsername !== undefined ? overrideOwnerUsername : queryOwnerUsername;
+    const role = roleOverride || currentUser?.role || 'user';
+    const bootstrapRequests = getBootstrapRequestsForRole(role);
     const [mailboxRes, providerRes, syncRes] = await Promise.all([
-      requestJson<MailboxesResponse>(`/api/admin/mailboxes?withLinks=1&limit=${queryLimit}${g ? `&group=${encodeURIComponent(g)}` : ''}`),
+      requestJson<MailboxesResponse>(`/api/admin/mailboxes?withLinks=1&limit=${queryLimit}${g ? `&group=${encodeURIComponent(g)}` : ''}${role === 'admin' && ownerUsername ? `&ownerUsername=${encodeURIComponent(ownerUsername)}` : ''}`),
       requestJson<ProvidersResponse>('/api/admin/providers'),
-      requestJson<SyncSettingsResponse>('/api/admin/sync-settings'),
+      bootstrapRequests.loadSyncSettings
+        ? requestJson<SyncSettingsResponse>('/api/admin/sync-settings')
+        : Promise.resolve(null),
     ]);
 
     setMailboxes(mailboxRes.mailboxes || []);
     setSelectedMailboxes(new Set());
+    setCurrentPage(1);
     setProviders(providerRes.providers || []);
-    setSyncSettings(syncRes.settings);
+    if (syncRes?.settings) {
+      setSyncSettings(syncRes.settings);
+    }
 
     if (!selectedProviderId && providerRes.providers.length > 0) {
       setSelectedProviderId(providerRes.providers[0].id);
@@ -244,9 +273,10 @@ export default function Admin() {
       setCurrentUser(response.currentUser || null);
 
       if (response.currentUser) {
+        const bootstrapRequests = getBootstrapRequestsForRole(response.currentUser.role);
         setAuthed(true);
-        await loadAll();
-        if (response.currentUser.role === 'admin') {
+        await loadAll(undefined, undefined, response.currentUser.role);
+        if (bootstrapRequests.loadUsers) {
           await loadUsers();
         }
       } else {
@@ -282,9 +312,12 @@ export default function Admin() {
       setAuthMode(response.mode || 'login');
       setCurrentUser(response.currentUser || null);
       setAuthed(true);
-      await loadAll();
-      if (response.currentUser?.role === 'admin') {
-        await loadUsers();
+      if (response.currentUser) {
+        const bootstrapRequests = getBootstrapRequestsForRole(response.currentUser.role);
+        await loadAll(undefined, undefined, response.currentUser.role);
+        if (bootstrapRequests.loadUsers) {
+          await loadUsers();
+        }
       }
     } catch (error: unknown) {
       setMsg(getErrorMessage(error));
@@ -1134,6 +1167,42 @@ export default function Admin() {
                   </h2>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {currentUser?.role === 'admin' && (
+                    <div className="relative">
+                      <input
+                        value={queryOwnerInput}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setQueryOwnerInput(nextValue);
+                          if (!nextValue.trim()) {
+                            setQueryOwnerUsername('');
+                            void loadAll(queryGroup, '');
+                          } else if (queryOwnerUsername !== nextValue.trim().toLowerCase()) {
+                            setQueryOwnerUsername('');
+                          }
+                        }}
+                        placeholder="搜索用户名字"
+                        className="w-40 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      {queryOwnerInput.trim() && queryOwnerUsername !== queryOwnerInput.trim().toLowerCase() && ownerSuggestions.length > 0 && (
+                        <div className="absolute left-0 top-full z-20 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+                          {ownerSuggestions.map((user) => (
+                            <button
+                              key={user.id}
+                              onClick={() => {
+                                setQueryOwnerInput(user.username);
+                                setQueryOwnerUsername(user.username);
+                                void loadAll(queryGroup, user.username);
+                              }}
+                              className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-emerald-50"
+                            >
+                              {user.username}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <select
                     value={queryGroup}
                     onChange={(e) => {
@@ -1235,6 +1304,7 @@ export default function Admin() {
                         const apiUrl = link ? `${base}/api/open/${link.token}?format=json` : '';
                         const remain = link ? (link.max_views > 0 ? Math.max(0, link.max_views - (link.views_used || 0)) : '∞') : '-';
                         const expire = link?.expires_at ? new Date(link.expires_at).toLocaleDateString('zh-CN') : (link ? '永不过期' : '-');
+                        const ownerName = currentUser?.role === 'admin' ? userMap.get(mb.owner_user_id)?.username : '';
 
                         if (editingMailbox === mb.email) {
                           return (
@@ -1322,8 +1392,15 @@ export default function Admin() {
                             </td>
                             <td className="px-3 py-3 text-xs text-gray-600 whitespace-nowrap">{expire}</td>
                             <td className="px-3 py-3 text-xs text-gray-700 whitespace-nowrap">
-                              {typeof remain === 'number' ? `${remain} / ${link?.max_views}` : remain}
-                              {link && link.max_views > 0 && <span className="text-gray-400 ml-1">({link.views_used}已用)</span>}
+                              <div>
+                                {typeof remain === 'number' ? `${remain} / ${link?.max_views}` : remain}
+                                {link && link.max_views > 0 && <span className="text-gray-400 ml-1">({link.views_used}已用)</span>}
+                              </div>
+                              {ownerName && (
+                                <div className="mt-0.5 text-[10px] text-gray-400">
+                                  账号：{ownerName}
+                                </div>
+                              )}
                             </td>
                             <td className="px-3 py-3 text-right">
                               <div className="flex items-center gap-1 justify-end">

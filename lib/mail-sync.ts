@@ -11,6 +11,7 @@ export type SyncProvider = {
 export type SyncMailbox = {
   email: string;
   provider_id?: string | null;
+  owner_user_id?: string;
 };
 
 export type SaveReceivedEmailInput = {
@@ -51,7 +52,7 @@ type SyncArgs = {
 export type SyncAllMailboxesArgs = {
   mailboxes: SyncMailbox[];
   providers: SyncProvider[];
-  syncMailbox: (args: { mailboxEmail: string; provider: SyncProvider }) => Promise<{
+  syncMailbox: (args: { mailboxEmail: string; ownerUserId?: string; provider: SyncProvider }) => Promise<{
     fetched: number;
     inserted: number;
     skipped: number;
@@ -238,6 +239,7 @@ export async function syncAllMailboxesFromProviders({
 
     const result = await syncMailbox({
       mailboxEmail: mailbox.email,
+      ownerUserId: mailbox.owner_user_id,
       provider,
     });
 

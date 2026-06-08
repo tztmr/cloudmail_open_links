@@ -1,8 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/admin';
-import { createShareLink, deleteShareLink, getMailboxByEmail, listShareLinks } from '@/lib/db';
+import {
+  createShareLink,
+  deleteShareLink,
+  getMailboxByEmail,
+  hasReceivedEmailMessageId,
+  insertReceivedEmail,
+  listProviders,
+  listReceivedForMailbox,
+  listShareLinks,
+  updateShareLinkLastEmailFingerprint,
+} from '@/lib/db';
+import { resolveProviderForMailbox, syncMailboxFromProvider } from '@/lib/mail-sync';
 import { parseBatchShareLinkOptions } from '@/lib/share-link-settings';
 import { ensureSyncRuntimeStarted } from '@/lib/sync-runtime';
+
+function getEmailFingerprint(email?: { message_id?: string | null; id?: string | null }) {
+  return String(email?.message_id || email?.id || '').trim() || null;
+}
 
 export async function GET() {
   ensureSyncRuntimeStarted();
@@ -39,16 +54,41 @@ export async function POST(req: NextRequest) {
 
   for (const email of emails) {
     if (!email || !email.includes('@')) continue;
-    const mailbox = await getMailboxByEmail(String(email));
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const mailbox = await getMailboxByEmail(normalizedEmail);
     const ownerUserId = viewer.role === 'admin'
       ? (mailbox?.owner_user_id || viewer.id)
       : viewer.id;
+    const ownedMailbox = await getMailboxByEmail(normalizedEmail, ownerUserId);
     const link = await createShareLink(
-      email,
+      normalizedEmail,
       linkOptions.maxViews,
       linkOptions.expiresInMinutes,
       ownerUserId,
     );
+
+    try {
+      const providers = await listProviders(ownerUserId);
+      const provider = resolveProviderForMailbox(
+        ownedMailbox || { email: normalizedEmail, provider_id: null },
+        providers,
+      );
+
+      if (provider) {
+        await syncMailboxFromProvider({
+          mailboxEmail: normalizedEmail,
+          provider,
+          hasMessageId: (messageId) => hasReceivedEmailMessageId(normalizedEmail, messageId, ownerUserId),
+          saveEmail: (receivedEmail) => insertReceivedEmail({ ...receivedEmail, owner_user_id: ownerUserId }),
+        });
+      }
+
+      const latestEmail = (await listReceivedForMailbox(normalizedEmail, 1, ownerUserId))[0];
+      await updateShareLinkLastEmailFingerprint(link.token, getEmailFingerprint(latestEmail));
+    } catch {
+      // Preloading latest email is best-effort; link creation itself should still succeed.
+    }
+
     createdLinks.push(link);
     urls.push(`${base.replace(/\/$/, '')}/open/${link.token}`);
   }

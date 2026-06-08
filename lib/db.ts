@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import crypto from 'node:crypto';
+import { collectReceivedEmailIdsToDelete } from '@/lib/mail-retention';
+import { evaluateShareLinkView } from '@/lib/share-link-views';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloudmail_open_links';
 
@@ -122,6 +124,7 @@ export type ShareLink = {
   mailbox_email: string;
   max_views: number;
   views_used: number;
+  last_email_fingerprint: string | null;
   expires_at: string | null;
   created_at: string;
 };
@@ -184,6 +187,7 @@ type ShareLinkDoc = BaseDoc & {
   mailbox_email: string;
   max_views?: number | null;
   views_used?: number | null;
+  last_email_fingerprint?: string | null;
   expires_at?: Date | string | null;
 };
 
@@ -203,6 +207,11 @@ function stringifyId(id?: { toString(): string } | string) {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function normalizeFingerprint(value?: string | null) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
 }
 
 function optionalOwner(ownerUserId?: string) {
@@ -257,6 +266,7 @@ function toShareLink(doc: ShareLinkDoc): ShareLink {
     mailbox_email: doc.mailbox_email,
     max_views: doc.max_views ?? 0,
     views_used: doc.views_used ?? 0,
+    last_email_fingerprint: normalizeFingerprint(doc.last_email_fingerprint),
     expires_at: doc.expires_at ? new Date(doc.expires_at).toISOString() : null,
     created_at: doc.created_at ? new Date(doc.created_at).toISOString() : new Date().toISOString(),
   };
@@ -512,6 +522,102 @@ export async function incrementShareView(token: string): Promise<{ ok: boolean; 
 
   const remaining = link.max_views > 0 ? Math.max(0, link.max_views - link.views_used) : null;
   return { ok: true, remaining };
+}
+
+export async function updateShareLinkLastEmailFingerprint(token: string, fingerprint?: string | null): Promise<ShareLink | undefined> {
+  await connectToDatabase();
+  const doc = await ShareLinkModel.findOneAndUpdate(
+    { token },
+    {
+      $set: {
+        last_email_fingerprint: normalizeFingerprint(fingerprint),
+      },
+    },
+    { new: true },
+  ).lean();
+
+  return doc ? toShareLink(doc as ShareLinkDoc) : undefined;
+}
+
+export async function consumeShareLinkView(token: string, currentEmailFingerprint?: string | null): Promise<{
+  ok: boolean;
+  remaining: number | null;
+  views_used: number | null;
+  last_email_fingerprint: string | null;
+}> {
+  await connectToDatabase();
+  const link = await ShareLinkModel.findOne({ token });
+  if (!link) {
+    return { ok: false, remaining: null, views_used: null, last_email_fingerprint: null };
+  }
+
+  const now = Date.now();
+  if (link.expires_at && now > new Date(link.expires_at).getTime()) {
+    return {
+      ok: false,
+      remaining: null,
+      views_used: link.views_used ?? 0,
+      last_email_fingerprint: normalizeFingerprint(link.last_email_fingerprint),
+    };
+  }
+
+  const decision = evaluateShareLinkView({
+    maxViews: link.max_views ?? 0,
+    viewsUsed: link.views_used ?? 0,
+    lastEmailFingerprint: normalizeFingerprint(link.last_email_fingerprint),
+    currentEmailFingerprint,
+  });
+
+  if (!decision.ok) {
+    return {
+      ok: false,
+      remaining: decision.remaining,
+      views_used: decision.nextViewsUsed,
+      last_email_fingerprint: decision.nextLastEmailFingerprint,
+    };
+  }
+
+  const nextFingerprint = normalizeFingerprint(decision.nextLastEmailFingerprint);
+  const currentFingerprint = normalizeFingerprint(link.last_email_fingerprint);
+  if (decision.shouldIncrement || nextFingerprint !== currentFingerprint) {
+    link.views_used = decision.nextViewsUsed;
+    link.last_email_fingerprint = nextFingerprint;
+    await link.save();
+  }
+
+  return {
+    ok: true,
+    remaining: decision.remaining,
+    views_used: decision.nextViewsUsed,
+    last_email_fingerprint: nextFingerprint,
+  };
+}
+
+export async function pruneReceivedEmailsKeepingLatest(keepPerMailbox = 1): Promise<number> {
+  await connectToDatabase();
+  const docs = await ReceivedEmailModel.find(
+    {},
+    { _id: 1, owner_user_id: 1, mailbox_email: 1, received_at: 1 },
+  ).lean();
+
+  const idsToDelete = collectReceivedEmailIdsToDelete(
+    (docs as Array<{
+      _id: { toString(): string } | string;
+      owner_user_id: string;
+      mailbox_email: string;
+      received_at?: Date | string | null;
+    }>).map((doc) => ({
+      id: stringifyId(doc._id),
+      owner_user_id: doc.owner_user_id,
+      mailbox_email: doc.mailbox_email,
+      received_at: doc.received_at ? new Date(doc.received_at).toISOString() : new Date(0).toISOString(),
+    })),
+    keepPerMailbox,
+  );
+
+  if (idsToDelete.length === 0) return 0;
+  await ReceivedEmailModel.deleteMany({ _id: { $in: idsToDelete } });
+  return idsToDelete.length;
 }
 
 export async function listShareLinks(limit = 200, ownerUserId?: string): Promise<Array<ShareLink & { mailbox_note: string | null }>> {

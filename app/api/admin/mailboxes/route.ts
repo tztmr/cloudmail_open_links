@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/admin';
-import { bulkUpsertMailboxes, listMailboxes, upsertMailbox, listShareLinks, deleteMailboxes } from '@/lib/db';
+import { bulkUpsertMailboxes, listMailboxes, upsertMailbox, listShareLinks, deleteMailboxes, getUserByUsername } from '@/lib/db';
+import { getMailboxLinkKey } from '@/lib/mailbox-admin-utils';
 import { ensureSyncRuntimeStarted } from '@/lib/sync-runtime';
 
 export async function DELETE(req: NextRequest) {
@@ -33,9 +34,18 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const withLinks = searchParams.get('withLinks') === '1';
   const group = searchParams.get('group');
+  const ownerUsername = String(searchParams.get('ownerUsername') || '').trim().toLowerCase();
   const limit = parseInt(searchParams.get('limit') || '1000', 10);
 
-  const ownerUserId = viewer.role === 'admin' ? undefined : viewer.id;
+  let ownerUserId = viewer.role === 'admin' ? undefined : viewer.id;
+  if (viewer.role === 'admin' && ownerUsername) {
+    const owner = await getUserByUsername(ownerUsername);
+    if (!owner) {
+      return NextResponse.json({ success: true, mailboxes: [] });
+    }
+    ownerUserId = owner.id;
+  }
+
   const boxes = await listMailboxes(limit, group || undefined, ownerUserId);
 
   if (!withLinks) {
@@ -45,14 +55,15 @@ export async function GET(req: NextRequest) {
   const links = await listShareLinks(500, ownerUserId);
   const byEmail = new Map<string, Awaited<ReturnType<typeof listShareLinks>>>();
   for (const l of links) {
-    const arr = byEmail.get(l.mailbox_email) || [];
+    const key = getMailboxLinkKey(l.owner_user_id, l.mailbox_email);
+    const arr = byEmail.get(key) || [];
     arr.push(l);
-    byEmail.set(l.mailbox_email, arr);
+    byEmail.set(key, arr);
   }
 
   const enriched = boxes.map((m) => ({
     ...m,
-    shareLinks: byEmail.get(m.email) || [],
+    shareLinks: byEmail.get(getMailboxLinkKey(m.owner_user_id, m.email)) || [],
   }));
   return NextResponse.json({ success: true, mailboxes: enriched });
 }

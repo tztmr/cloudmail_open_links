@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeOpenData } from '../lib/open-mail.ts';
+import { normalizeOpenData, OPEN_MAIL_POLL_INTERVAL_MS } from '../lib/open-mail.ts';
 
 test('normalizeOpenData 会把邮件列表 id 统一转成字符串', () => {
   const normalized = normalizeOpenData({
@@ -14,4 +14,8 @@ test('normalizeOpenData 会把邮件列表 id 统一转成字符串', () => {
   });
 
   assert.deepEqual(normalized.emails?.map((email) => email.id), ['123', '456']);
+});
+
+test('公开链接页每 5 秒轮询一次最新邮件', () => {
+  assert.equal(OPEN_MAIL_POLL_INTERVAL_MS, 5000);
 });

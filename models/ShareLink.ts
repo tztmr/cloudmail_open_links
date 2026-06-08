@@ -6,6 +6,7 @@ const ShareLinkSchema = new Schema({
   mailbox_email: { type: String, required: true, lowercase: true, index: true },
   max_views: { type: Number, default: 0 },
   views_used: { type: Number, default: 0 },
+  last_email_fingerprint: { type: String, default: null },
   expires_at: { type: Date, default: null },
 }, { timestamps: { createdAt: 'created_at', updatedAt: false } });
 
