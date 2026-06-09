@@ -605,7 +605,7 @@ export default function OpenViewer() {
                         安全 HTML 阅读视图
                       </div>
                       <p className="mt-1 text-sm text-slate-500">
-                        保留原邮件 HTML 排版，并自动适配正文高度，减少错位和压缩。
+                        原版邮件
                       </p>
                     </div>
                     <iframe
