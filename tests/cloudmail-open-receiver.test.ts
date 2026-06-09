@@ -413,3 +413,93 @@ test('cloudmail-open-receiver 支持启用 nginx + certbot HTTPS', () => {
   assert.match(result.stdout, /certbot --nginx -d mail\.example\.com/);
   assert.match(result.stdout, /HTTPS 地址: https:\/\/mail\.example\.com/);
 });
+
+test('cloudmail-open-receiver 生成的 nginx 配置会保留 nginx 变量', () => {
+  const fixture = createProjectFixture({
+    envContent: 'PUBLIC_BASE_URL=http://localhost:4138\n',
+  });
+  const scriptPath = path.join(fixture.projectDir, 'cloudmail-open-receiver.sh');
+  const nginxConfDir = path.join(fixture.tempRoot, 'nginx-conf');
+  fs.mkdirSync(nginxConfDir, { recursive: true });
+
+  writeStateFile(
+    fixture.tempRoot,
+    [
+      `PROJECT_ROOT='${fixture.projectDir}'`,
+      `ENV_FILE='${path.join(fixture.projectDir, '.env')}'`,
+      `APP_NAME='ssl-cloudmail'`,
+      `APP_PORT='4138'`,
+      `APP_HOSTNAME='0.0.0.0'`,
+    ].join('\n')
+  );
+
+  const result = runScript(
+    scriptPath,
+    fixture.projectDir,
+    fixture.binDir,
+    fixture.logPath,
+    ['enable-ssl'],
+    {
+      HOME: fixture.tempRoot,
+      NGINX_CONF_DIR: nginxConfDir,
+    },
+    'mail.example.com\nadmin@mail.example.com\n'
+  );
+
+  const confPath = path.join(nginxConfDir, 'mail.example.com.conf');
+  const conf = fs.readFileSync(confPath, 'utf8');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(conf, /proxy_set_header Host \$host;/);
+  assert.match(conf, /proxy_set_header X-Real-IP \$remote_addr;/);
+  assert.match(conf, /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/);
+  assert.match(conf, /proxy_set_header X-Forwarded-Proto \$scheme;/);
+});
+
+test('cloudmail-open-receiver 启用 HTTPS 时会优先使用 docker-compose 当前端口而不是旧状态端口', () => {
+  const fixture = createProjectFixture({
+    envContent: 'PUBLIC_BASE_URL=http://localhost:4138\n',
+    composeContent: [
+      'services:',
+      '  app:',
+      '    build: .',
+      '    ports:',
+      '      - "4138:3000"',
+      '  mongo:',
+      '    image: mongo:7',
+      '',
+    ].join('\n'),
+  });
+  const scriptPath = path.join(fixture.projectDir, 'cloudmail-open-receiver.sh');
+  const nginxConfDir = path.join(fixture.tempRoot, 'nginx-conf');
+  fs.mkdirSync(nginxConfDir, { recursive: true });
+
+  writeStateFile(
+    fixture.tempRoot,
+    [
+      `PROJECT_ROOT='${fixture.projectDir}'`,
+      `ENV_FILE='${path.join(fixture.projectDir, '.env')}'`,
+      `APP_NAME='ssl-cloudmail'`,
+      `APP_PORT='3118'`,
+      `APP_HOSTNAME='0.0.0.0'`,
+    ].join('\n')
+  );
+
+  const result = runScript(
+    scriptPath,
+    fixture.projectDir,
+    fixture.binDir,
+    fixture.logPath,
+    ['enable-ssl'],
+    {
+      HOME: fixture.tempRoot,
+      NGINX_CONF_DIR: nginxConfDir,
+    },
+    'mail.example.com\nadmin@mail.example.com\n'
+  );
+
+  const confPath = path.join(nginxConfDir, 'mail.example.com.conf');
+  const conf = fs.readFileSync(confPath, 'utf8');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(conf, /proxy_pass http:\/\/127\.0\.0\.1:4138;/);
+  assert.doesNotMatch(conf, /proxy_pass http:\/\/127\.0\.0\.1:3118;/);
+});
