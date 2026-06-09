@@ -21,7 +21,7 @@ import {
   DEFAULT_BATCH_LINK_MAX_VIEWS,
   parseBatchShareLinkOptions,
 } from '@/lib/share-link-settings';
-import { findUsersByUsername, getBootstrapRequestsForRole } from '@/lib/mailbox-admin-utils';
+import { findUsersByUsername, getAdminPanelVisibility, getBootstrapRequestsForRole } from '@/lib/mailbox-admin-utils';
 
 type CharType = 'mixed' | 'number' | 'english';
 
@@ -176,7 +176,6 @@ export default function Admin() {
   const [providerJson, setProviderJson] = useState('');
 
   const [bulkText, setBulkText] = useState('');
-  const [singleEmail, setSingleEmail] = useState('');
   const [note, setNote] = useState('');
   const [group, setGroup] = useState('');
   const [batchLinkMaxViews, setBatchLinkMaxViews] = useState(DEFAULT_BATCH_LINK_MAX_VIEWS);
@@ -230,6 +229,11 @@ export default function Admin() {
     if (currentUser?.role !== 'admin') return [];
     return findUsersByUsername(users, queryOwnerInput).slice(0, 8);
   }, [currentUser?.role, queryOwnerInput, users]);
+
+  const panelVisibility = useMemo(
+    () => getAdminPanelVisibility(currentUser?.role || 'user'),
+    [currentUser?.role],
+  );
 
   async function loadAll(
     overrideGroup?: string,
@@ -382,28 +386,6 @@ export default function Admin() {
       });
       setMsg(`导入完成，新增 ${response.created || 0} 个`);
       setBulkText('');
-      await loadAll();
-    } catch (error: unknown) {
-      setMsg(getErrorMessage(error));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function addSingle() {
-    if (!singleEmail.trim()) return;
-    setLoading(true);
-    try {
-      await requestJson<{ success: boolean; mailbox: Mailbox }>(
-        '/api/admin/mailboxes',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: singleEmail, note, group, mode: 'single' }),
-        }
-      );
-      setMsg('添加成功');
-      setSingleEmail('');
       await loadAll();
     } catch (error: unknown) {
       setMsg(getErrorMessage(error));
@@ -878,247 +860,224 @@ export default function Admin() {
           <div className="space-y-8 lg:col-span-1">
             
             {/* Sync Settings */}
-            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-                <div className="flex items-center gap-2">
-                  <RefreshCw className="w-4 h-4 text-gray-500" />
-                  <h2 className="font-semibold text-gray-800">后台自动同步</h2>
+            {panelVisibility.showSyncSettings && (
+              <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4 text-gray-500" />
+                    <h2 className="font-semibold text-gray-800">后台自动同步</h2>
+                  </div>
+                  <button 
+                    role="switch" 
+                    aria-checked={syncSettings.enabled}
+                    onClick={() => void updateSyncEnabled(!syncSettings.enabled)}
+                    className={`${syncSettings.enabled ? 'bg-emerald-500' : 'bg-gray-200'} relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2`}
+                  >
+                    <span className={`${syncSettings.enabled ? 'translate-x-4' : 'translate-x-0'} pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`} />
+                  </button>
                 </div>
-                <button 
-                  role="switch" 
-                  aria-checked={syncSettings.enabled}
-                  onClick={() => void updateSyncEnabled(!syncSettings.enabled)}
-                  className={`${syncSettings.enabled ? 'bg-emerald-500' : 'bg-gray-200'} relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2`}
-                >
-                  <span className={`${syncSettings.enabled ? 'translate-x-4' : 'translate-x-0'} pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`} />
-                </button>
-              </div>
-              <div className="p-5 text-sm text-gray-600 leading-relaxed">
-                默认开启；服务端会每 <span className="font-medium text-gray-900">{syncSettings.interval_seconds}</span> 秒轮询一次所有已绑定 provider 的邮箱并写入本地库。
-              </div>
-            </section>
+                <div className="p-5 text-sm text-gray-600 leading-relaxed">
+                  默认开启；服务端会每 <span className="font-medium text-gray-900">{syncSettings.interval_seconds}</span> 秒轮询一次所有已绑定 provider 的邮箱并写入本地库。
+                </div>
+              </section>
+            )}
 
             {/* Providers */}
-            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2 bg-gray-50/50">
-                <Settings className="w-4 h-4 text-gray-500" />
-                <h2 className="font-semibold text-gray-800">邮箱接口管理</h2>
-              </div>
-              <div className="p-5 space-y-4">
-                <p className="text-xs text-gray-500">
-                  支持配置多个上游接口，请选择 JSON 文件导入。
-                </p>
-                {providerJson && (
-                  <div className="text-xs text-emerald-600 font-medium">
-                    已加载 JSON 数据，准备导入。
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <label className="flex-1 bg-gray-900 hover:bg-gray-800 text-white text-xs font-medium py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
-                    <UploadCloud className="w-3.5 h-3.5" />
-                    选择 JSON 文件
-                    <input type="file" accept=".json" onChange={handleProviderFileUpload} className="hidden" />
-                  </label>
-                  <button 
-                    onClick={() => void importProvidersFromJson()} 
-                    disabled={loading || !providerJson}
-                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                  >
-                    确认导入
-                  </button>
-                  <button 
-                    onClick={() => {
-                      const blob = new Blob([JSON.stringify(providers, null, 2)], { type: 'application/json' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `cloudmail-configs-${new Date().toISOString().slice(0, 10)}.json`;
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="px-3 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-lg transition-colors"
-                  >
-                    导出配置
-                  </button>
+            {panelVisibility.showProviderManagement && (
+              <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-2 bg-gray-50/50">
+                  <Settings className="w-4 h-4 text-gray-500" />
+                  <h2 className="font-semibold text-gray-800">邮箱接口管理</h2>
                 </div>
-
-                {providers.length > 0 && (
-                  <div className="pt-4 border-t border-gray-100 space-y-2">
-                    {providers.map((p) => (
-                      <div key={p.id} className="group flex items-center justify-between p-2.5 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-gray-900 truncate">{p.name}</div>
-                          <div className="text-xs text-gray-500 truncate">{p.domain}</div>
-                        </div>
-                        <button 
-                          onClick={() => void deleteProvider(p.id, p.name)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </section>
-            {/* Cloud Creation (Primary Action) */}
-            <section className="bg-gradient-to-br from-emerald-50 to-teal-50/30 rounded-2xl border border-emerald-100 shadow-sm overflow-hidden relative">
-              <div className="absolute top-0 right-0 p-6 opacity-10 pointer-events-none">
-                <Cloud className="w-32 h-32 text-emerald-600" />
-              </div>
-              <div className="px-6 py-5 border-b border-emerald-100/50 relative z-10">
-                <h2 className="font-bold text-emerald-900 text-lg flex items-center gap-2">
-                  <Cloud className="w-5 h-5 text-emerald-600" />
-                  云端创建与一键生成链接
-                </h2>
-                <p className="text-sm text-emerald-700/80 mt-1">
-                  直接调用上游 API 批量创建真实邮箱 + 自动落库 + 自动生成访问链接。
-                </p>
-              </div>
-              <div className="p-6 relative z-10">
-                <div className="grid grid-cols-2 gap-4 items-end">
-                  <div className="col-span-2">
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">选择接口</label>
-                    <select
-                      value={selectedProviderId}
-                      onChange={(e) => setSelectedProviderId(e.target.value)}
-                      className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    >
-                      <option value="">(使用环境变量默认接口)</option>
-                      {providers.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name} — {p.domain}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">数量</label>
-                    <input type="number" value={createCount} onChange={(e) => setCreateCount(clamp(Number(e.target.value), 1, 100))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">前缀</label>
-                    <input value={createPrefix} onChange={(e) => setCreatePrefix(e.target.value)} placeholder="可选" className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">分组</label>
-                    <div className="flex gap-2">
-                      <select
-                        value={availableGroups.includes(group) ? group : ''}
-                        onChange={(e) => { if (e.target.value) setGroup(e.target.value); }}
-                        className="px-2 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      >
-                        <option value="">自定义</option>
-                        {availableGroups.map((g) => <option key={g} value={g}>{g}</option>)}
-                      </select>
-                      <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="分组(可选)" className="flex-1 px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <div className="p-5 space-y-4">
+                  <p className="text-xs text-gray-500">
+                    支持配置多个上游接口，请选择 JSON 文件导入。
+                  </p>
+                  {providerJson && (
+                    <div className="text-xs text-emerald-600 font-medium">
+                      已加载 JSON 数据，准备导入。
                     </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">类型</label>
-                    <select value={createCharType} onChange={(e) => setCreateCharType(normalizeCharType(e.target.value))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                      <option value="mixed">混合(Mixed)</option>
-                      <option value="number">数字(Number)</option>
-                      <option value="english">英文(English)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">长度</label>
-                    <input type="number" value={createCharLen} onChange={(e) => setCreateCharLen(clamp(Number(e.target.value), 4, 20))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">最大查看次数(0=无限)</label>
-                    <input type="number" value={createMaxViews} onChange={(e) => setCreateMaxViews(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-emerald-800 mb-1.5">有效期(分钟, 0=无限)</label>
-                    <input type="number" value={createExpiresMin} onChange={(e) => setCreateExpiresMin(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div className="col-span-2 flex justify-end mt-2">
+                  )}
+                  <div className="flex gap-2">
+                    <label className="flex-1 bg-gray-900 hover:bg-gray-800 text-white text-xs font-medium py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      选择 JSON 文件
+                      <input type="file" accept=".json" onChange={handleProviderFileUpload} className="hidden" />
+                    </label>
                     <button 
-                      onClick={() => void createProviderAccounts()} 
-                      disabled={loading} 
-                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
+                      onClick={() => void importProvidersFromJson()} 
+                      disabled={loading || !providerJson}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium py-2 px-3 rounded-lg transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
                     >
-                      <Plus className="w-4 h-4" />
-                      {loading ? '创建中...' : '创建并生成链接'}
+                      确认导入
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const blob = new Blob([JSON.stringify(providers, null, 2)], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `cloudmail-configs-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="px-3 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-lg transition-colors"
+                    >
+                      导出配置
                     </button>
                   </div>
-                </div>
 
-                {lastCreated.length > 0 && (
-                  <div className="mt-6 bg-white rounded-xl border border-emerald-100 shadow-sm overflow-hidden">
-                    <div className="px-4 py-3 bg-emerald-50/50 border-b border-emerald-100 flex flex-col gap-2">
-                      <span className="text-sm font-semibold text-emerald-900">本次创建结果 ({lastCreated.length})</span>
+                  {providers.length > 0 && (
+                    <div className="pt-4 border-t border-gray-100 space-y-2">
+                      {providers.map((p) => (
+                        <div key={p.id} className="group flex items-center justify-between p-2.5 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-gray-900 truncate">{p.name}</div>
+                            <div className="text-xs text-gray-500 truncate">{p.domain}</div>
+                          </div>
+                          <button 
+                            onClick={() => void deleteProvider(p.id, p.name)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+            {/* Cloud Creation (Primary Action) */}
+            {panelVisibility.showProviderAccountCreation && (
+              <section className="bg-gradient-to-br from-emerald-50 to-teal-50/30 rounded-2xl border border-emerald-100 shadow-sm overflow-hidden relative">
+                <div className="absolute top-0 right-0 p-6 opacity-10 pointer-events-none">
+                  <Cloud className="w-32 h-32 text-emerald-600" />
+                </div>
+                <div className="px-6 py-5 border-b border-emerald-100/50 relative z-10">
+                  <h2 className="font-bold text-emerald-900 text-lg flex items-center gap-2">
+                    <Cloud className="w-5 h-5 text-emerald-600" />
+                    云端创建与一键生成链接
+                  </h2>
+                  <p className="text-sm text-emerald-700/80 mt-1">
+                    直接调用上游 API 批量创建真实邮箱 + 自动落库 + 自动生成访问链接。
+                  </p>
+                </div>
+                <div className="p-6 relative z-10">
+                  <div className="grid grid-cols-2 gap-4 items-end">
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">选择接口</label>
+                      <select
+                        value={selectedProviderId}
+                        onChange={(e) => setSelectedProviderId(e.target.value)}
+                        className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="">(使用环境变量默认接口)</option>
+                        {providers.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name} — {p.domain}</option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">数量</label>
+                      <input type="number" value={createCount} onChange={(e) => setCreateCount(clamp(Number(e.target.value), 1, 100))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">前缀</label>
+                      <input value={createPrefix} onChange={(e) => setCreatePrefix(e.target.value)} placeholder="可选" className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">分组</label>
                       <div className="flex gap-2">
-                        <button onClick={copyAllLinks} className="flex-1 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-100/50 hover:bg-emerald-100 rounded-md transition-colors flex items-center justify-center gap-1.5">
-                          <Copy className="w-3.5 h-3.5" /> 复制全部
-                        </button>
-                        <button onClick={exportCreatedAsCSV} className="flex-1 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-md transition-colors flex items-center justify-center gap-1.5">
-                          <Download className="w-3.5 h-3.5" /> 导出 CSV
-                        </button>
+                        <select
+                          value={availableGroups.includes(group) ? group : ''}
+                          onChange={(e) => { if (e.target.value) setGroup(e.target.value); }}
+                          className="px-2 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="">自定义</option>
+                          {availableGroups.map((g) => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                        <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="分组(可选)" className="flex-1 px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                       </div>
                     </div>
-                    <div className="max-h-60 overflow-y-auto">
-                      <table className="min-w-full divide-y divide-gray-100 text-sm text-left">
-                        <thead className="bg-gray-50/50 text-gray-500 text-xs uppercase tracking-wider sticky top-0 backdrop-blur-md">
-                          <tr>
-                            <th className="px-4 py-2 font-medium">邮箱</th>
-                            <th className="px-4 py-2 font-medium">密码</th>
-                            <th className="px-4 py-2 font-medium">访问链接</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50 bg-white">
-                          {lastCreated.map((acc, i) => (
-                            <tr key={`${acc.email}-${i}`} className="hover:bg-gray-50/50 transition-colors">
-                              <td className="px-4 py-2 font-mono text-xs text-gray-900">{acc.email}</td>
-                              <td className="px-4 py-2 font-mono text-xs text-gray-600 flex items-center gap-2">
-                                {acc.password}
-                                <button onClick={() => navigator.clipboard.writeText(acc.password)} className="text-gray-400 hover:text-gray-700"><Copy className="w-3 h-3" /></button>
-                              </td>
-                              <td className="px-4 py-2">
-                                <a href={acc.shareLink?.url || '#'} target="_blank" rel="noreferrer" className="text-emerald-600 hover:text-emerald-700 hover:underline font-medium text-xs flex items-center gap-1">
-                                  {acc.shareLink?.url ? '打开' : ''}
-                                </a>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">类型</label>
+                      <select value={createCharType} onChange={(e) => setCreateCharType(normalizeCharType(e.target.value))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        <option value="mixed">混合(Mixed)</option>
+                        <option value="number">数字(Number)</option>
+                        <option value="english">英文(English)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">长度</label>
+                      <input type="number" value={createCharLen} onChange={(e) => setCreateCharLen(clamp(Number(e.target.value), 4, 20))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">最大查看次数(0=无限)</label>
+                      <input type="number" value={createMaxViews} onChange={(e) => setCreateMaxViews(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-emerald-800 mb-1.5">有效期(分钟, 0=无限)</label>
+                      <input type="number" value={createExpiresMin} onChange={(e) => setCreateExpiresMin(Math.max(0, Number(e.target.value)))} className="w-full px-3 py-2 bg-white/80 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    </div>
+                    <div className="col-span-2 flex justify-end mt-2">
+                      <button 
+                        onClick={() => void createProviderAccounts()} 
+                        disabled={loading} 
+                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        {loading ? '创建中...' : '创建并生成链接'}
+                      </button>
                     </div>
                   </div>
-                )}
-              </div>
-            </section>
 
-            {/* Single Add */}
-            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-              <h2 className="font-semibold text-gray-800 flex items-center gap-2 mb-4">
-                <Mail className="w-4 h-4 text-gray-500" />
-                添加单个邮箱
-              </h2>
-              <div className="space-y-3">
-                <input value={singleEmail} onChange={(e) => setSingleEmail(e.target.value)} placeholder="email@domain.com" className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" />
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="flex gap-1.5">
-                    <select
-                      value={availableGroups.includes(group) ? group : ''}
-                      onChange={(e) => { if (e.target.value) setGroup(e.target.value); }}
-                      className="px-2 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900"
-                      title="选择已有分组"
-                    >
-                      <option value="">自定义</option>
-                      {availableGroups.map((g) => <option key={g} value={g}>{g}</option>)}
-                    </select>
-                    <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="分组(可选)" className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" title="分组" />
-                  </div>
-                  <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="标题/备注 (可选)" className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 transition-colors" title="标题/备注" />
+                  {lastCreated.length > 0 && (
+                    <div className="mt-6 bg-white rounded-xl border border-emerald-100 shadow-sm overflow-hidden">
+                      <div className="px-4 py-3 bg-emerald-50/50 border-b border-emerald-100 flex flex-col gap-2">
+                        <span className="text-sm font-semibold text-emerald-900">本次创建结果 ({lastCreated.length})</span>
+                        <div className="flex gap-2">
+                          <button onClick={copyAllLinks} className="flex-1 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-100/50 hover:bg-emerald-100 rounded-md transition-colors flex items-center justify-center gap-1.5">
+                            <Copy className="w-3.5 h-3.5" /> 复制全部
+                          </button>
+                          <button onClick={exportCreatedAsCSV} className="flex-1 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-md transition-colors flex items-center justify-center gap-1.5">
+                            <Download className="w-3.5 h-3.5" /> 导出 CSV
+                          </button>
+                        </div>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto">
+                        <table className="min-w-full divide-y divide-gray-100 text-sm text-left">
+                          <thead className="bg-gray-50/50 text-gray-500 text-xs uppercase tracking-wider sticky top-0 backdrop-blur-md">
+                            <tr>
+                              <th className="px-4 py-2 font-medium">邮箱</th>
+                              <th className="px-4 py-2 font-medium">密码</th>
+                              <th className="px-4 py-2 font-medium">访问链接</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-50 bg-white">
+                            {lastCreated.map((acc, i) => (
+                              <tr key={`${acc.email}-${i}`} className="hover:bg-gray-50/50 transition-colors">
+                                <td className="px-4 py-2 font-mono text-xs text-gray-900">{acc.email}</td>
+                                <td className="px-4 py-2 font-mono text-xs text-gray-600 flex items-center gap-2">
+                                  {acc.password}
+                                  <button onClick={() => navigator.clipboard.writeText(acc.password)} className="text-gray-400 hover:text-gray-700"><Copy className="w-3 h-3" /></button>
+                                </td>
+                                <td className="px-4 py-2">
+                                  <a href={acc.shareLink?.url || '#'} target="_blank" rel="noreferrer" className="text-emerald-600 hover:text-emerald-700 hover:underline font-medium text-xs flex items-center gap-1">
+                                    {acc.shareLink?.url ? '打开' : ''}
+                                  </a>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <button onClick={() => void addSingle()} disabled={loading} className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-medium rounded-lg transition-colors">
-                  添加邮箱
-                </button>
-              </div>
-            </section>
+              </section>
+            )}
           </div>
 
           {/* Right Column: Main Operations */}

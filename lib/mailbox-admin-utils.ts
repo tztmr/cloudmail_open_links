@@ -37,3 +37,14 @@ export function getBootstrapRequestsForRole(role: UserRole) {
     loadSyncSettings: isAdmin,
   };
 }
+
+export function getAdminPanelVisibility(role: UserRole) {
+  const isAdmin = role === 'admin';
+
+  return {
+    showSyncSettings: isAdmin,
+    showProviderManagement: isAdmin,
+    showProviderAccountCreation: isAdmin,
+    showSingleMailboxCreation: false,
+  };
+}
