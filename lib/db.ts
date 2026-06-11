@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import crypto from 'node:crypto';
 import { collectReceivedEmailIdsToDelete } from '@/lib/mail-retention';
 import { evaluateShareLinkView } from '@/lib/share-link-views';
+import { DEFAULT_SYNC_INTERVAL_SECONDS } from './sync-settings.ts';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloudmail_open_links';
 
@@ -715,7 +716,7 @@ export async function getSyncSetting(): Promise<SyncSetting> {
   const doc = await SyncSettingModel.findById('global').lean();
   return {
     enabled: doc?.enabled ?? true,
-    interval_seconds: 60,
+    interval_seconds: doc?.interval_seconds ?? DEFAULT_SYNC_INTERVAL_SECONDS,
   };
 }
 
@@ -726,7 +727,7 @@ export async function setSyncSetting(enabled: boolean): Promise<SyncSetting> {
     {
       $set: {
         enabled,
-        interval_seconds: 60,
+        interval_seconds: DEFAULT_SYNC_INTERVAL_SECONDS,
       },
     },
     { upsert: true, new: true },
@@ -734,7 +735,7 @@ export async function setSyncSetting(enabled: boolean): Promise<SyncSetting> {
 
   return {
     enabled: doc?.enabled ?? enabled,
-    interval_seconds: 60,
+    interval_seconds: doc?.interval_seconds ?? DEFAULT_SYNC_INTERVAL_SECONDS,
   };
 }
 

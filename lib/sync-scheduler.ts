@@ -1,4 +1,5 @@
 import type { SyncAllMailboxesResult } from '@/lib/mail-sync';
+import { DEFAULT_SYNC_INTERVAL_SECONDS } from './sync-settings.ts';
 
 export type SyncSettings = {
   enabled: boolean;
@@ -23,7 +24,7 @@ type SyncSchedulerState = {
 export function normalizeSyncSettings(value: Partial<SyncSettings> | null | undefined): SyncSettings {
   return {
     enabled: value?.enabled ?? true,
-    interval_seconds: 60,
+    interval_seconds: value?.interval_seconds ?? DEFAULT_SYNC_INTERVAL_SECONDS,
   };
 }
 

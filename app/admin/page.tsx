@@ -21,6 +21,7 @@ import {
   DEFAULT_BATCH_LINK_MAX_VIEWS,
   parseBatchShareLinkOptions,
 } from '@/lib/share-link-settings';
+import { DEFAULT_SYNC_INTERVAL_SECONDS } from '@/lib/sync-settings';
 import { findUsersByUsername, getAdminPanelVisibility, getBootstrapRequestsForRole } from '@/lib/mailbox-admin-utils';
 
 type CharType = 'mixed' | 'number' | 'english';
@@ -173,7 +174,10 @@ export default function Admin() {
 
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [syncSettings, setSyncSettings] = useState<SyncSettings>({ enabled: true, interval_seconds: 60 });
+  const [syncSettings, setSyncSettings] = useState<SyncSettings>({
+    enabled: true,
+    interval_seconds: DEFAULT_SYNC_INTERVAL_SECONDS,
+  });
   const [selectedProviderId, setSelectedProviderId] = useState('');
   const [providerJson, setProviderJson] = useState('');
 

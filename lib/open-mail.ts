@@ -1,3 +1,5 @@
+import { DEFAULT_SYNC_INTERVAL_SECONDS } from './sync-settings.ts';
+
 export type OpenEmailItem = {
   id: string;
   from?: string | null;
@@ -8,7 +10,7 @@ export type OpenEmailItem = {
   has_html?: boolean;
 };
 
-export const OPEN_MAIL_POLL_INTERVAL_MS = 5000;
+export const OPEN_MAIL_POLL_INTERVAL_MS = DEFAULT_SYNC_INTERVAL_SECONDS * 1000;
 
 type OpenLink = {
   expires_at?: string | null;

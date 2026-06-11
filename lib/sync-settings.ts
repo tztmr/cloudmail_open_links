@@ -1,0 +1,1 @@
+export const DEFAULT_SYNC_INTERVAL_SECONDS = 2;
