@@ -156,6 +156,8 @@ function normalizeCharType(value: string): CharType {
   return value === 'number' || value === 'english' ? value : 'mixed';
 }
 
+const PAGE_SIZE_ALL = -1;
+
 export default function Admin() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -708,9 +710,12 @@ export default function Admin() {
     });
   }
 
-  const totalPages = Math.ceil(mailboxes.length / pageSize) || 1;
+  const effectivePageSize = pageSize === PAGE_SIZE_ALL ? Math.max(mailboxes.length, 1) : pageSize;
+  const totalPages = pageSize === PAGE_SIZE_ALL ? 1 : Math.ceil(mailboxes.length / effectivePageSize) || 1;
   const validCurrentPage = clamp(currentPage, 1, totalPages);
-  const paginatedMailboxes = mailboxes.slice((validCurrentPage - 1) * pageSize, validCurrentPage * pageSize);
+  const paginatedMailboxes = pageSize === PAGE_SIZE_ALL
+    ? mailboxes
+    : mailboxes.slice((validCurrentPage - 1) * effectivePageSize, validCurrentPage * effectivePageSize);
 
   if (!authed) {
     return (
@@ -1262,7 +1267,7 @@ export default function Admin() {
                     <tbody className="divide-y divide-gray-100 bg-white">
                       {paginatedMailboxes.map((mb, index) => {
                         const link = mb.shareLinks && mb.shareLinks.length > 0 ? mb.shareLinks[0] : null;
-                        const absoluteIndex = (validCurrentPage - 1) * pageSize + index + 1;
+                        const absoluteIndex = (validCurrentPage - 1) * effectivePageSize + index + 1;
                         const base = typeof window !== 'undefined' ? window.location.origin : '';
                         const openUrl = link ? `${base}/open/${link.token}` : '';
                         const apiUrl = link ? `${base}/api/open/${link.token}?format=json` : '';
@@ -1398,7 +1403,7 @@ export default function Admin() {
               {mailboxes.length > 0 && (
                 <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
                   <div className="text-sm text-gray-500">
-                    共 {mailboxes.length} 条记录，当前显示第 {(validCurrentPage - 1) * pageSize + 1} 到 {Math.min(validCurrentPage * pageSize, mailboxes.length)} 条
+                    共 {mailboxes.length} 条记录，当前显示第 {mailboxes.length === 0 ? 0 : (validCurrentPage - 1) * effectivePageSize + 1} 到 {mailboxes.length === 0 ? 0 : Math.min(validCurrentPage * effectivePageSize, mailboxes.length)} 条
                   </div>
                   <div className="flex items-center gap-2">
                     <select
@@ -1412,6 +1417,7 @@ export default function Admin() {
                       <option value={20}>20条/页</option>
                       <option value={50}>50条/页</option>
                       <option value={100}>100条/页</option>
+                      <option value={PAGE_SIZE_ALL}>所有</option>
                     </select>
                     <button
                       disabled={validCurrentPage <= 1}
