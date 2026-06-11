@@ -23,6 +23,8 @@ import {
   Inbox,
   Link as LinkIcon,
   Loader2,
+  Pause,
+  Play,
   ShieldCheck,
   Sparkles,
   User,
@@ -136,6 +138,7 @@ export default function OpenViewer() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [iframeHeight, setIframeHeight] = useState(720);
   const [copyStatus, setCopyStatus] = useState<{ kind: 'mailbox' | 'code'; ok: boolean } | null>(null);
+  const [pollingEnabled, setPollingEnabled] = useState(true);
   const htmlPreview = selected?.html_body ? sanitizeHtmlDocument(selected.html_body) : null;
 
   useEffect(() => {
@@ -168,6 +171,12 @@ export default function OpenViewer() {
     };
 
     void load();
+    if (!pollingEnabled) {
+      return () => {
+        active = false;
+      };
+    }
+
     const interval = window.setInterval(() => {
       void load(true);
     }, OPEN_MAIL_POLL_INTERVAL_MS);
@@ -175,7 +184,7 @@ export default function OpenViewer() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [token]);
+  }, [token, pollingEnabled]);
 
   const activeId = data?.emails?.some((email) => email.id === userSelectedId)
     ? userSelectedId
@@ -351,6 +360,19 @@ export default function OpenViewer() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setPollingEnabled((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 rounded-2xl border px-3 py-1.5 text-xs font-medium transition"
+              style={{
+                borderColor: pollingEnabled ? 'rgba(16,185,129,0.25)' : 'rgba(255,255,255,0.1)',
+                backgroundColor: pollingEnabled ? 'rgba(16,185,129,0.1)' : 'rgba(255,255,255,0.05)',
+                color: pollingEnabled ? '#d1fae5' : '#94a3b8',
+              }}
+            >
+              {pollingEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              {pollingEnabled ? '实时·开' : '实时·关'}
+            </button>
             <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 md:block">
               Token {maskToken(token)}
             </div>
