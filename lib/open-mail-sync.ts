@@ -105,9 +105,6 @@ export function createOpenMailboxSyncCoordinator(
       lastError: null,
     };
     entries.set(mailboxKey, created);
-    // #region debug-point B:entry-created
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'B', location: 'lib/open-mail-sync.ts:getEntry', msg: '[DEBUG] coordinator entry created', data: { mailboxKey, entryCount: entries.size, rss: typeof process !== 'undefined' ? process.memoryUsage().rss : null, heapUsed: typeof process !== 'undefined' ? process.memoryUsage().heapUsed : null }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
     return created;
   }
 
@@ -154,10 +151,6 @@ export function createOpenMailboxSyncCoordinator(
     pruneEntries(now);
     const entry = getEntry(mailboxKey);
 
-    // #region debug-point B:sync-start
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'B', location: 'lib/open-mail-sync.ts:sync:start', msg: '[DEBUG] coordinator sync requested', data: { mailboxKey, entryCount: entries.size, hasInFlight: !!entry.inFlight, hasLastResult: !!entry.lastResult, ageMs: entry.lastCompletedAt > 0 ? now - entry.lastCompletedAt : null }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
-
     if (entry.inFlight) {
       return waitForResult(entry, maxWaitMs);
     }
@@ -183,9 +176,6 @@ export function createOpenMailboxSyncCoordinator(
           entry.lastError = null;
           entry.inFlight = null;
           pruneEntries(entry.lastCompletedAt);
-          // #region debug-point B:sync-finished
-          fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'B', location: 'lib/open-mail-sync.ts:sync:finished', msg: '[DEBUG] coordinator sync finished', data: { mailboxKey, entryCount: entries.size, lastCompletedAt: entry.lastCompletedAt, rss: typeof process !== 'undefined' ? process.memoryUsage().rss : null, heapUsed: typeof process !== 'undefined' ? process.memoryUsage().heapUsed : null }, ts: Date.now() }) }).catch(() => {});
-          // #endregion
           return result;
         },
         (error: unknown) => {
@@ -193,9 +183,6 @@ export function createOpenMailboxSyncCoordinator(
           entry.lastError = getErrorMessage(error);
           entry.inFlight = null;
           pruneEntries(entry.lastCompletedAt);
-          // #region debug-point B:sync-failed
-          fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'B', location: 'lib/open-mail-sync.ts:sync:failed', msg: '[DEBUG] coordinator sync failed', data: { mailboxKey, entryCount: entries.size, error: entry.lastError }, ts: Date.now() }) }).catch(() => {});
-          // #endregion
           throw error;
         }
       );

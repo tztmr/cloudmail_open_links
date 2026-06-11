@@ -26,13 +26,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
-  const requestStartedAt = Date.now();
-  const traceId = globalThis.crypto?.randomUUID?.() || `open-mail-${requestStartedAt}`;
-  const ensureStartedAt = Date.now();
   ensureSyncRuntimeStarted();
-  // #region debug-point C:runtime-start
-  fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'C', traceId, location: 'app/api/open/[token]/route.ts:GET', msg: '[DEBUG] ensured sync runtime', data: { ensureMs: Date.now() - ensureStartedAt, rss: typeof process !== 'undefined' ? process.memoryUsage().rss : null, heapUsed: typeof process !== 'undefined' ? process.memoryUsage().heapUsed : null }, ts: Date.now() }) }).catch(() => {});
-  // #endregion
   const { token } = await params;
   const link = await getShareLinkByToken(token);
   if (!link) {
@@ -44,9 +38,15 @@ export async function GET(
     return NextResponse.json({ error: 'Link expired' }, { status: 410 });
   }
 
-  let syncResult: { fetched: number; inserted: number; skipped: number } | null = null;
-  let syncError: string | null = null;
-  let syncStatus: 'completed' | 'failed' | 'timed_out' | 'skipped_recent' | null = null;
+  // 先查库返回已有邮件，不阻塞用户
+  const emails = await listReceivedForMailbox(link.mailbox_email, 1, link.owner_user_id);
+  const currentEmailFingerprint = getEmailFingerprint(emails[0]);
+  const consumeResult = await consumeShareLinkView(token, currentEmailFingerprint);
+  if (!consumeResult.ok) {
+    return NextResponse.json({ error: 'View limit reached or link expired' }, { status: 429 });
+  }
+
+  // 后台补同步 + 预热，不阻塞响应
   try {
     const mailbox = await getMailboxByEmail(link.mailbox_email, link.owner_user_id);
     const providers = await listProviders(link.owner_user_id);
@@ -61,13 +61,8 @@ export async function GET(
         minIntervalMs: OPEN_PROVIDER_WARMUP_MIN_INTERVAL_MS,
         run: () => warmProviderConnection(provider),
       });
-      // #region debug-point D:warmup-scheduled
-      fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'post-fix', hypothesisId: 'D', traceId, location: 'app/api/open/[token]/route.ts:warmup', msg: '[DEBUG] provider warmup scheduled', data: { mailbox: link.mailbox_email, providerId: provider.id, warmupEntryCount: openMailProviderWarmupCoordinator.getStats().entryCount }, ts: Date.now() }) }).catch(() => {});
-      // #endregion
-      // #region debug-point A:provider-selected
-      fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'app/api/open/[token]/route.ts:provider', msg: '[DEBUG] provider selected for open mail sync', data: { mailbox: link.mailbox_email, providerId: provider.id, providerDomain: provider.domain, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-      // #endregion
-      const syncOutcome = await openMailboxSyncCoordinator.sync({
+
+      void openMailboxSyncCoordinator.sync({
         mailboxKey: `${link.owner_user_id || 'global'}:${link.mailbox_email.trim().toLowerCase()}`,
         maxWaitMs: OPEN_MAIL_SYNC_MAX_WAIT_MS,
         minIntervalMs: OPEN_MAIL_SYNC_MIN_INTERVAL_MS,
@@ -78,26 +73,9 @@ export async function GET(
           saveEmail: (email) => insertReceivedEmail({ ...email, owner_user_id: link.owner_user_id }),
         }),
       });
-      syncResult = syncOutcome.result;
-      syncError = syncOutcome.error;
-      syncStatus = syncOutcome.status;
-      // #region debug-point A:sync-outcome
-      fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'app/api/open/[token]/route.ts:sync-outcome', msg: '[DEBUG] open mail sync completed', data: { mailbox: link.mailbox_email, syncStatus, syncError, syncResult, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-      // #endregion
     }
-  } catch (e: unknown) {
-    syncError = e instanceof Error ? e.message : 'Sync failed';
-    syncStatus = 'failed';
-    // #region debug-point A:sync-error
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'app/api/open/[token]/route.ts:sync-error', msg: '[DEBUG] open mail sync threw error', data: { error: syncError, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
-  }
-
-  const emails = await listReceivedForMailbox(link.mailbox_email, 1, link.owner_user_id);
-  const currentEmailFingerprint = getEmailFingerprint(emails[0]);
-  const consumeResult = await consumeShareLinkView(token, currentEmailFingerprint);
-  if (!consumeResult.ok) {
-    return NextResponse.json({ error: 'View limit reached or link expired' }, { status: 429 });
+  } catch {
+    // 后台同步失败不影响已有数据返回
   }
 
   const base = process.env.PUBLIC_BASE_URL || '';
@@ -126,20 +104,12 @@ export async function GET(
       has_html: !!e.html_body,
       has_raw: !!e.raw,
     })),
-    sync: syncResult,
-    sync_status: syncStatus,
-    sync_error: syncError,
     _url: url,
   };
-
-  // #region debug-point A:response-ready
-  fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'app/api/open/[token]/route.ts:response', msg: '[DEBUG] open mail response ready', data: { mailbox: link.mailbox_email, emailCount: emails.length, syncStatus, totalMs: Date.now() - requestStartedAt, rss: typeof process !== 'undefined' ? process.memoryUsage().rss : null, heapUsed: typeof process !== 'undefined' ? process.memoryUsage().heapUsed : null }, ts: Date.now() }) }).catch(() => {});
-  // #endregion
 
   if (wantJson) {
     return NextResponse.json(payload);
   }
 
-  // default also json, the pretty UI is at the page
   return NextResponse.json(payload);
 }

@@ -121,28 +121,12 @@ export async function warmProviderConnection(
   fetchImpl: typeof fetch = fetch
 ) {
   const endpoint = normalizePublicApiBase(provider.domain);
-  const requestStartedAt = Date.now();
-  const traceId = globalThis.crypto?.randomUUID?.() || `provider-warm-${requestStartedAt}`;
-
-  // #region debug-point D:warmup-start
-  fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'post-fix', hypothesisId: 'D', traceId, location: 'lib/mail-sync.ts:warmProviderConnection:start', msg: '[DEBUG] provider warmup starting', data: { providerId: provider.id, providerDomain: provider.domain }, ts: Date.now() }) }).catch(() => {});
-  // #endregion
-
-  try {
-    await fetchImpl(endpoint, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json, text/plain, */*',
-      },
-    });
-    // #region debug-point D:warmup-finished
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'post-fix', hypothesisId: 'D', traceId, location: 'lib/mail-sync.ts:warmProviderConnection:success', msg: '[DEBUG] provider warmup finished', data: { providerId: provider.id, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
-  } catch (error: unknown) {
-    // #region debug-point D:warmup-error
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'post-fix', hypothesisId: 'D', traceId, location: 'lib/mail-sync.ts:warmProviderConnection:error', msg: '[DEBUG] provider warmup failed', data: { providerId: provider.id, error: error instanceof Error ? error.message : 'warmup failed', elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
-  }
+  await fetchImpl(endpoint, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json, text/plain, */*',
+    },
+  });
 }
 
 export function resolveProviderForMailbox(mailbox: SyncMailbox, providers: SyncProvider[]) {
@@ -171,12 +155,6 @@ export async function syncMailboxFromProvider({
 }: SyncArgs) {
   const normalizedEmail = mailboxEmail.trim().toLowerCase();
   const endpoint = `${normalizePublicApiBase(provider.domain)}/emailList`;
-  const requestStartedAt = Date.now();
-  const traceId = globalThis.crypto?.randomUUID?.() || `mail-sync-${requestStartedAt}`;
-
-  // #region debug-point A:provider-fetch-start
-  fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'lib/mail-sync.ts:syncMailboxFromProvider:start', msg: '[DEBUG] provider fetch starting', data: { mailbox: normalizedEmail, providerId: provider.id, providerDomain: provider.domain }, ts: Date.now() }) }).catch(() => {});
-  // #endregion
 
   const res = await fetchImpl(endpoint, {
     method: 'POST',
@@ -196,25 +174,16 @@ export async function syncMailboxFromProvider({
   });
 
   if (!res.ok) {
-    // #region debug-point A:provider-fetch-http-error
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'lib/mail-sync.ts:syncMailboxFromProvider:http-error', msg: '[DEBUG] provider fetch failed with non-ok status', data: { mailbox: normalizedEmail, status: res.status, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
     throw new Error(`Upstream sync failed: ${res.status}`);
   }
 
   const payload = await res.json() as { code?: number | string; message?: string; data?: UpstreamEmailItem[] };
   const ok = payload?.code === 200 || payload?.code === '200' || String(payload?.message || '').toLowerCase() === 'success';
   if (!ok) {
-    // #region debug-point A:provider-fetch-payload-error
-    fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'lib/mail-sync.ts:syncMailboxFromProvider:payload-error', msg: '[DEBUG] provider fetch returned unsuccessful payload', data: { mailbox: normalizedEmail, message: payload?.message || null, code: payload?.code ?? null, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-    // #endregion
     throw new Error(payload?.message || 'Upstream sync failed');
   }
 
   const items = Array.isArray(payload?.data) ? payload.data : [];
-  // #region debug-point A:provider-fetch-success
-  fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'open-mail-first-load', runId: 'pre-fix', hypothesisId: 'A', traceId, location: 'lib/mail-sync.ts:syncMailboxFromProvider:success', msg: '[DEBUG] provider fetch succeeded', data: { mailbox: normalizedEmail, itemCount: items.length, elapsedMs: Date.now() - requestStartedAt }, ts: Date.now() }) }).catch(() => {});
-  // #endregion
   let inserted = 0;
   let skipped = 0;
 
